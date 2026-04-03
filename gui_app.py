@@ -913,15 +913,14 @@ class ModernApp(tk.Tk):
 
         def _discover():
             try:
-                import llm_extractor as G
-                conn = G.load_db_to_memory(db_path, lambda m: self._q.put(
-                    {"type": "log", "msg": m}))
-
+                import sqlite3 as _sql
                 species = self._species_var.get()
                 tech_name = self._tech_var.get()
                 min_n = self._min_var.get()
                 tech_set = TECHNOLOGY_MAP.get(tech_name, set())
 
+                self._q.put({"type": "log", "msg": "Querying GEOmetadb on disk..."})
+                conn = _sql.connect(db_path)
                 cur = conn.cursor()
                 if tech_set:
                     tech_list = ",".join(f"'{t}'" for t in tech_set)
