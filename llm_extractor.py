@@ -1366,26 +1366,23 @@ def compute_ollama_parallel(model: str,
             except Exception:
                 loaded_vram_gb = slot_gb   # assume one copy loaded
 
-            kv_per_slot   = max(0.015, slot_gb * 0.01)  # KV cache per slot (empirical)
+            # KV cache per VRAM-resident slot (fits in GPU memory)
+            kv_per_slot_vram = max(0.015, slot_gb * 0.01)
             os_reserve    = 1.0
             headroom      = total_vram - loaded_vram_gb - os_reserve - extra_vram_gb
-            # Cap at 200 GPU workers — beyond that CPU scheduling becomes bottleneck
-            gpu_workers   = max(1, min(200, int(headroom / kv_per_slot)))
+            vram_slots    = max(1, int(headroom / kv_per_slot_vram))
+
+            # Ollama spills excess parallel slots into system RAM.
+            # Each spilled slot uses ~0.5 GB of RAM for KV cache — NOT 0.01.
+            # Cap total workers so RAM-spilled slots stay within safe budget.
+            kv_per_slot_ram = 0.5  # empirical: RAM-resident KV per slot
+            ram_budget_gb   = min(free_gb * 0.40, 200.0)  # use at most 40% of free RAM
+            ram_spill_slots = max(0, int(ram_budget_gb / kv_per_slot_ram))
+
+            # Total = VRAM slots + RAM-spill slots, hard cap at 80
+            gpu_workers = max(1, min(80, vram_slots + ram_spill_slots))
         else:
             gpu_workers = 0
-
-        #  CPU workers  RAM already occupied by GPU model copies 
-        # GPU model copies live in VRAM, not RAM  don't subtract from RAM
-        ram_after_gpu = free_gb - reserve_gb
-        ram_slots     = max(0, int(ram_after_gpu / slot_gb))
-
-        # CPU threads: Ollama uses ~2 threads per slot.
-        # Leave 2 cores for OS + pipeline overhead.
-        cpu_count  = os.cpu_count() or 4
-        # Leave 2 cores for OS + pipeline, use rest for Ollama.
-        # Ollama uses ~1 thread per parallel slot on CPU for gemma2.
-        usable_cpu = max(1, cpu_count - 2)
-        cpu_slots  = max(0, usable_cpu)   # 1 slot per core, not //2
 
         # CPU workers DISABLED — causes system freezing
         cpu_workers = 0
@@ -4370,20 +4367,20 @@ class Watchdog:
     CHECK_INTERVAL  = 3
     # ── Fluid scaling thresholds (NEVER pause, scale workers instead) ──
     # Above HIGH: scale down workers.  Below LOW: scale back up.
-    RAM_HIGH_PCT    = 92.0;  RAM_LOW_PCT     = 80.0
+    RAM_HIGH_PCT    = 50.0;  RAM_LOW_PCT     = 35.0
     CPU_HIGH_PCT    = 90.0;  CPU_LOW_PCT     = 75.0
     VRAM_PAUSE_PCT  = 90.0;  VRAM_RESUME_PCT = 80.0
     # ── Hard pause: protect the machine ──
-    RAM_PAUSE_PCT   = 99.0;  RAM_RESUME_PCT  = 90.0
+    RAM_PAUSE_PCT   = 70.0;  RAM_RESUME_PCT  = 50.0
     CPU_PAUSE_PCT   = 95.0;  CPU_RESUME_PCT  = 85.0
     # ── Thermal protection (these still pause — hardware safety) ──
     CPU_TEMP_PAUSE_C  = 88.0;  CPU_TEMP_RESUME_C  = 72.0
     GPU_TEMP_PAUSE_C  = 85.0;  GPU_TEMP_RESUME_C  = 70.0
     # ── Fluid scaling parameters ──
-    SCALE_DOWN_FACTOR = 0.6   # multiply current workers by this when above threshold
-    SCALE_UP_STEP     = 20    # add this many workers when below threshold
+    SCALE_DOWN_FACTOR = 0.4   # multiply current workers by this when above threshold
+    SCALE_UP_STEP     = 5     # add this many workers when below threshold
     MIN_WORKERS       = 4     # never go below this
-    SCALE_COOLDOWN_S  = 10    # seconds between scale adjustments
+    SCALE_COOLDOWN_S  = 5     # seconds between scale adjustments
     _CONFIG_RELOAD_EVERY = 5  # reload config every N watchdog ticks
 
     def __init__(self, log_fn=None, stat_fn=None):
@@ -4412,6 +4409,22 @@ class Watchdog:
                      "SCALE_DOWN_FACTOR", "MIN_WORKERS"):
             if key in cfg:
                 setattr(self, key, float(cfg[key]))
+        # Live worker count adjustment from GUI
+        if "MAX_WORKERS" in cfg:
+            new_max = int(cfg["MAX_WORKERS"])
+            old_max = getattr(self, "_max_workers", 0)
+            if new_max != old_max and new_max >= self.MIN_WORKERS:
+                self._max_workers = new_max
+                adj_fn = getattr(self, "_adjust_concurrency", None)
+                cur = getattr(self, "_target_parallel", old_max)
+                if adj_fn and cur > new_max:
+                    adj_fn(new_max)
+                    self._target_parallel = new_max
+                    self._log(f"  🔧 Workers: {cur} → {new_max} (GUI override)")
+                elif adj_fn and cur < new_max:
+                    adj_fn(new_max)
+                    self._target_parallel = new_max
+                    self._log(f"  🔧 Workers: {cur} → {new_max} (GUI override)")
 
     def start(self):    self._thread.start(); return self
     def stop(self):

@@ -608,6 +608,27 @@ class ModernApp(tk.Tk):
 
         thr_grid.columnconfigure(1, weight=1)
 
+        # ── Live worker count slider ──
+        wk_live_frame = tk.Frame(thr_card, bg=BG_CARD)
+        wk_live_frame.pack(fill="x", padx=10, pady=(6, 2))
+
+        tk.Label(wk_live_frame, text=f"{ICO_WORKER} Max workers (live):",
+                 bg=BG_CARD, fg=CYAN, font=self._fn_small).pack(side="left")
+
+        self._live_workers_var = tk.IntVar(value=int(thr_cfg.get("MAX_WORKERS", 80)))
+        self._live_workers_scale = tk.Scale(
+            wk_live_frame, from_=4, to=200, orient="horizontal",
+            variable=self._live_workers_var, bg=BG_CARD, fg=TEXT,
+            troughcolor=BG_INPUT, highlightthickness=0,
+            font=self._fn_small, showvalue=True, sliderlength=18,
+            command=lambda v: self._on_live_workers_change())
+        self._live_workers_scale.pack(side="left", fill="x", expand=True, padx=(8, 4))
+
+        self._live_workers_lbl = tk.Label(wk_live_frame,
+                                           text=f"{self._live_workers_var.get()}",
+                                           bg=BG_CARD, fg=CYAN, font=self._fn_head, width=4)
+        self._live_workers_lbl.pack(side="left")
+
         self._thr_status_var = tk.StringVar(
             value="Drag sliders to throttle the running pipeline in real-time")
         tk.Label(thr_card, textvariable=self._thr_status_var, bg=BG_CARD,
@@ -769,6 +790,17 @@ class ModernApp(tk.Tk):
             f"{cfg.get('CPU_PAUSE_PCT',95)}%  "
             f"VRAM:{cfg.get('VRAM_PAUSE_PCT',90)}%  "
             f"RAM:{cfg.get('RAM_HIGH_PCT',92)}%)")
+
+    def _on_live_workers_change(self):
+        """Called when user drags the live worker slider — writes MAX_WORKERS
+        to config file so the running pipeline's Watchdog adjusts within ~15s."""
+        new_val = self._live_workers_var.get()
+        cfg = self._load_threshold_config()
+        cfg["MAX_WORKERS"] = new_val
+        self._save_threshold_config(cfg)
+        self._live_workers_lbl.config(text=f"{new_val}")
+        self._thr_status_var.set(
+            f"Workers → {new_val}  (pipeline will adjust within ~15s)")
 
     def _update_gauge(self, name, pct, text):
         """Update a resource gauge bar."""
