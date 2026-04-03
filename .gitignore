@@ -1,0 +1,25 @@
+# Large files — download separately
+GEOmetadb.sqlite
+GEOmetadb.sqlite.gz
+.gse_meta_cache.json
+
+# Runtime
+__pycache__/
+*.pyc
+*.log
+*.csv
+!LLM_memory/*.txt
+
+# Results
+*_NS_repaired_final_results/
+*_results/
+checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# DB is downloaded separately
+biomedical_memory.db
+*.bak
+*.pre_merge_bak
