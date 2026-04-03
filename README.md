@@ -108,13 +108,29 @@ git clone https://github.com/SciSpectator/LLM-Label-Extractor.git
 cd LLM-Label-Extractor
 ```
 
-### 2. Install Python Dependencies
+### 2. Create a Virtual Environment (Recommended)
+
+Using a virtual environment keeps dependencies isolated and avoids conflicts with system packages.
+
+```bash
+# Create virtual environment
+python3 -m venv venv
+
+# Activate it
+source venv/bin/activate        # Linux / macOS
+# OR
+.\venv\Scripts\activate          # Windows
+```
+
+> **Note:** You must activate the virtual environment every time you open a new terminal before running the pipeline.
+
+### 3. Install Python Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Install Ollama & Pull the Model
+### 4. Install Ollama & Pull the Model
 
 #### Ubuntu / Debian
 
@@ -160,7 +176,7 @@ winget install Ollama.Ollama
 ollama pull gemma2:2b
 ```
 
-### 4. Download GEOmetadb
+### 5. Download GEOmetadb
 
 The pipeline requires the GEOmetadb SQLite database (~19 GB) from NCBI.
 
@@ -201,7 +217,7 @@ move GEOmetadb.sqlite C:\path\to\LLM-Label-Extractor\
 
 > **Note:** The pipeline will automatically detect either `GEOmetadb.sqlite` or `GEOmetadb.sqlite.gz` in the project directory.
 
-### 5. Verification (Optional but Recommended)
+### 6. Verification (Optional but Recommended)
 
 ```bash
 # Verify Ollama is running
@@ -229,9 +245,15 @@ python run_gui.py
 3. Choose **Technology** (any platform technology available in GEOmetadb)
 4. Click **Start** -- the pipeline will discover platforms, then process each through all three phases
 
-### CLI / Terminal Batch Mode
+### CLI / Terminal Batch Mode (Servers & HPC)
+
+The terminal mode is designed for headless servers, HPC clusters, and SSH sessions where no display is available.
 
 ```bash
+# Activate your virtual environment first
+source venv/bin/activate
+
+# Run the pipeline
 python run_batch_terminal.py
 ```
 
@@ -241,6 +263,50 @@ Edit the configuration block at the top of `run_batch_terminal.py` to set:
 SPECIES     = "Homo sapiens"
 TECH_MODE   = "Expression Microarray"
 ```
+
+#### Running on HPC / SLURM
+
+For HPC environments, make sure Ollama is running on the compute node (or accessible via a forwarded port), then submit as a standard job:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=llm-label
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --time=48:00:00
+
+# Load modules (adjust for your cluster)
+module load python/3.10
+
+# Activate virtual environment
+source /path/to/LLM-Label-Extractor/venv/bin/activate
+
+# Start Ollama if not running as a service
+ollama serve &
+sleep 5
+ollama pull gemma2:2b
+
+# Run the pipeline
+python run_batch_terminal.py
+```
+
+#### Long-Running Sessions
+
+For long runs over SSH, use `screen` or `tmux` to keep the process alive after disconnecting:
+
+```bash
+# Start a persistent session
+tmux new -s llm-extract
+
+# Inside tmux: activate venv and run
+source venv/bin/activate
+python run_batch_terminal.py
+
+# Detach: Ctrl+B then D
+# Reattach later: tmux attach -t llm-extract
+```
+
+#### Monitoring Progress
 
 Monitor progress in a separate terminal:
 
@@ -426,7 +492,7 @@ ollama pull gemma2:2b
 FileNotFoundError: GEOmetadb.sqlite not found
 ```
 
-**Fix:** Download and place in the project directory. See [Download GEOmetadb](#4-download-geometadb).
+**Fix:** Download and place in the project directory. See [Download GEOmetadb](#5-download-geometadb).
 
 ### Out of memory during Phase 2
 
