@@ -5846,6 +5846,17 @@ def pipeline(config: dict, q: queue.Queue):
                 log(f"  [WARN] Could not save Phase 1 checkpoint: {_ce}")
             log(f"  Phase 1 complete — {len(phase1_extracted):,} GSMs extracted")
 
+            # Save Phase 1-only snapshot (before Phase 1b mutates the dict)
+            try:
+                import copy as _copy_mod
+                _p1_only_snap = _copy_mod.deepcopy(phase1_extracted)
+                _p1_only_path = os.path.join(run_dir, "checkpoints", "phase1_only_extracted.json")
+                with open(_p1_only_path, "w") as _f:
+                    json.dump(_p1_only_snap, _f)
+                log(f"  Phase 1-only snapshot saved: {_p1_only_path}")
+            except Exception as _ce:
+                log(f"  [WARN] Could not save Phase 1-only snapshot: {_ce}")
+
             #  Phase 1b: NS inference via GSEInferencer (KV cache reuse)
             # GSE context sent as SYSTEM prompt → Ollama caches KV tensors
             # → ~40% latency reduction vs old approach (context in user msg)
@@ -6375,21 +6386,37 @@ def pipeline(config: dict, q: queue.Queue):
             log(f" labels_final.csv      {len(final_df):,} rows  "
                 f"(resolved: {', '.join(f'{c}={n_resolved[c]}' for c in _cols)})")
 
-            # --- labels_raw.csv  (Phase 1 extraction only from checkpoint) ---
+            # --- labels_raw.csv / labels_phase1.csv  (Phase 1 extraction only) ---
+            import json as _json
+            _p1_only_path = os.path.join(run_dir, "checkpoints", "phase1_only_extracted.json")
             _ckpt_path = os.path.join(run_dir, "checkpoints", "phase1_extracted.json")
-            if os.path.isfile(_ckpt_path):
-                import json as _json
-                with open(_ckpt_path) as _f:
+
+            # Phase 1 only (before Phase 1b inference)
+            _p1_src = _p1_only_path if os.path.isfile(_p1_only_path) else _ckpt_path
+            if os.path.isfile(_p1_src):
+                with open(_p1_src) as _f:
                     _p1_data = _json.load(_f)
                 raw_df = res_df[["gsm", "series_id"]].copy()
                 for c in _cols:
                     raw_df[c] = raw_df["gsm"].map(lambda g, _c=c: _p1_data.get(g, {}).get(_c, NS))
-                log(f" labels_raw.csv        {len(raw_df):,} rows  (Phase 1 extraction only)")
+                _tag = "Phase 1 only" if _p1_src == _p1_only_path else "Phase 1+1b (no P1-only snapshot)"
+                log(f" labels_raw.csv        {len(raw_df):,} rows  ({_tag})")
             else:
                 raw_df = final_df.copy()
-                log(f" labels_raw.csv        {len(raw_df):,} rows  (no Phase 1 checkpoint — copy of final)")
+                log(f" labels_raw.csv        {len(raw_df):,} rows  (no checkpoint — copy of final)")
             raw_path = os.path.join(run_dir, "labels_raw.csv")
             raw_df.to_csv(raw_path, index=False)
+
+            # Phase 1b (after NS inference, before collapse)
+            if os.path.isfile(_ckpt_path):
+                with open(_ckpt_path) as _f:
+                    _p1b_data = _json.load(_f)
+                p1b_df = res_df[["gsm", "series_id"]].copy()
+                for c in _cols:
+                    p1b_df[c] = p1b_df["gsm"].map(lambda g, _c=c: _p1b_data.get(g, {}).get(_c, NS))
+                p1b_path = os.path.join(run_dir, "labels_phase1b.csv")
+                p1b_df.to_csv(p1b_path, index=False)
+                log(f" labels_phase1b.csv    {len(p1b_df):,} rows  (Phase 1 + 1b, before collapse)")
 
             # --- full_repaired.csv  (complete platform with labels merged) ---
             full_df = target.copy()
