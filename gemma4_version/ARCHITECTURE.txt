@@ -1,0 +1,68 @@
+TAILS Label Extraction Pipeline — gemma4:e2b Version
+=====================================================
+
+Model: gemma4:e2b (Google Gemma 4, 2B edge model, 7.2GB)
+Key: think=false via HTTP API (disables chain-of-thought, ~0.5s/call)
+Context window: num_ctx=512 (tight — only what's needed per call)
+
+Architecture: 3 Independent Per-Label LLM Agents
+=================================================
+
+Each label column (Tissue, Condition, Treatment) has its OWN dedicated
+LLM agent with its OWN prompt, context, and memory. They never share
+context or output across labels — fully independent, run in parallel.
+
+Memory Sources (all 3 phases use these):
+  1. GSE Context — experiment title/summary/design for THIS GSE only
+     (not all GSEs, each experiment gets its own isolated context)
+  2. Sibling Labels — label distribution from other samples in the
+     SAME experiment, for THIS column only
+  3. biomedical.db — cluster vocabulary (1,529 Tissue, 2,767 Condition,
+     3,169 Treatment clusters) with semantic embeddings + episodic memory
+
+Pipeline Phases:
+================
+
+PHASE 1: Per-Label Extraction (3 parallel agents per sample)
+  Input:  Raw GSM metadata (title, source, characteristics)
+  Memory: GSE experiment context (title + summary)
+  Output: One extracted label per column
+  Model:  gemma4:e2b, think=false, num_ctx=512, num_predict=60
+  Speed:  ~0.88s/sample (3 labels in parallel)
+
+PHASE 1b: Per-Label GSE Inference (only for NS fields)
+  Input:  Sample metadata + NS fields from Phase 1
+  Memory: THIS GSE's experiment context as SYSTEM prompt (KV cached)
+  Output: Inferred labels for fields still Not Specified
+  Model:  gemma4:e2b, think=false, num_ctx=512, num_predict=60
+  Speed:  ~0.44s/sample
+  Note:   One GSEInferencer per GSE — NOT shared across experiments
+
+PHASE 2: Per-Label Collapse (tiered cascade)
+  Input:  Extracted label from Phase 1/1b
+  Memory: biomedical.db clusters + GSE sibling labels for THIS column
+  Cascade:
+    0. Abbreviation expansion (deterministic, O(1))
+    1. Cluster map lookup (deterministic, O(1)) — ~65% of labels
+    2. GSE-dominant fast path (deterministic) — >70% sibling agreement
+    3. Single LLM call with candidates + siblings (replaces old ReAct)
+    4. Deterministic fallback (exact/abbreviation match)
+    5. Cluster gate (case-insensitive validation against vocabulary)
+  Model:  gemma4:e2b, think=false, num_ctx=512, num_predict=60
+  Speed:  ~0.34s/sample (most resolve deterministically in <1ms)
+
+Key Design Decisions:
+  - think=false: gemma4's reasoning chain takes 3000+ tokens of internal
+    thinking before answering. Disabling it gives same accuracy at ~50x speed.
+  - num_ctx=512: Only GSM metadata goes in — no bloated context.
+    GSE context is injected only in Phase 1b (as system prompt, KV cached).
+  - Per-label independence: Tissue/Condition/Treatment never cross-contaminate.
+  - Collapse prompts are lean: just label + candidates + siblings.
+    No sample metadata or GSE summary (that's noise for vocabulary mapping).
+  - Case-insensitive cluster gate: "Pcb" matches "PBC" in biomedical.db.
+
+Performance:
+  Total: ~1.61s/sample (all 3 phases)
+  ETA for 1,983 samples with 3 workers: ~18 minutes
+  RAM: ~200MB (excluding GEOmetadb load)
+  GPU VRAM: ~7.2GB (gemma4:e2b)
