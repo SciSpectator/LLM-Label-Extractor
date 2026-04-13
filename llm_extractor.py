@@ -1030,7 +1030,7 @@ class MemoryAgent:
                 if cls._st_model is None:
                     try:
                         from sentence_transformers import SentenceTransformer
-                        cls._st_model = SentenceTransformer("all-MiniLM-L6-v2")
+                        cls._st_model = SentenceTransformer("FremyCompany/BioLORD-2023-C")
                     except ImportError:
                         pass
         return cls._st_model
@@ -3429,7 +3429,7 @@ Respond with ONLY the cluster name (or NEW: name)."""
         if self._st_model is None:
             try:
                 from sentence_transformers import SentenceTransformer
-                self._st_model = SentenceTransformer("all-MiniLM-L6-v2")
+                self._st_model = SentenceTransformer("FremyCompany/BioLORD-2023-C")
             except ImportError:
                 self._log("  [CollapseWorker] sentence-transformers not available")
         return self._st_model
@@ -7070,6 +7070,13 @@ class App(tk.Tk):
                        activebackground=BG2
                        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
+        # Row 3  skip Phase 2 (extract only)
+        self._var_skip_phase2 = tk.BooleanVar(value=False)
+        tk.Checkbutton(g4, text="Skip Phase 2 collapse (extract Phase 1+1b only)",
+                       variable=self._var_skip_phase2, bg=BG2, fg=FG, selectcolor=ACCENT,
+                       activebackground=BG2
+                       ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 0))
+
         #  Model & Ollama card 
         c3 = card(left, "Model & Ollama")
         g3 = tk.Frame(c3, bg=BG2); g3.pack(fill=tk.X); g3.columnconfigure(1, weight=1)
@@ -8238,6 +8245,7 @@ class App(tk.Tk):
                 "limit":            limit,
                 "num_workers":      workers,
                 "skip_install":     self._var_skip.get(),
+                "skip_phase2":      self._var_skip_phase2.get(),
                 "gsm_list_file":    "",
             }
             self._thread = threading.Thread(
@@ -8275,6 +8283,7 @@ class App(tk.Tk):
                 "limit":          limit,
                 "num_workers":    workers,
                 "skip_install":   self._var_skip.get(),
+                "skip_phase2":    self._var_skip_phase2.get(),
                 "gsm_list_file":  self._var_gsm_file.get().strip()
                                   if mode == "gsm_list" else "",
             }

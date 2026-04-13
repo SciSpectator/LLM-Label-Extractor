@@ -1,6 +1,6 @@
 <p align="center">
   <br>
-  <img src="https://img.shields.io/badge/LLM--Label--Extractor-v2.0-blueviolet?style=for-the-badge" alt="LLM-Label-Extractor v2.0">
+  <img src="https://img.shields.io/badge/LLM--Label--Extractor-v2.1-blueviolet?style=for-the-badge" alt="LLM-Label-Extractor v2.1">
   <br><br>
   <strong>LLM-Label-Extractor</strong><br>
   <em>Multi-agent pipeline for extracting and normalizing biomedical metadata labels from GEO microarray data</em>
@@ -23,7 +23,7 @@
 
 **LLM-Label-Extractor** is a multi-agent pipeline that extracts and normalizes **Tissue**, **Condition**, and **Treatment** metadata labels from [Gene Expression Omnibus (GEO)](https://www.ncbi.nlm.nih.gov/geo/) microarray data using local LLMs. It runs entirely offline via [Ollama](https://ollama.com/) -- no API keys, no cloud, no data leaves your machine.
 
-**New in v2.0:** The default model is now **`gemma4:e2b`** (Google Gemma 4 Edge 2B) with per-label extraction agents and `think=false` for faster reasoning. `gemma2:2b` remains available for low-VRAM setups.
+**New in v2.1:** Phase 2 collapse overhauled with **retrieval-augmented LLM reasoning** -- BioLORD-2023 biomedical embeddings find the 20 most relevant canonical clusters, then `gemma4:e2b` picks the best match (~700ms/label, 0% orphan cluster pollution). Includes `skip_phase2` GUI option, per-phase evaluation snapshots, and CREEDS benchmark suite.
 
 ---
 
@@ -31,7 +31,7 @@
 
 | | Feature | Description |
 |---|---|---|
-| :brain: | **4-Tier Memory System** | Cluster map, semantic, episodic, and knowledge graph memory for consistent label normalization |
+| :brain: | **Retrieval-Augmented Collapse** | BioLORD-2023 semantic retrieval + LLM reasoning for label normalization (2025 SOTA pattern) |
 | :robot: | **Multi-Agent Swarm** | One GSEWorker agent per experiment, parallel across all available hardware |
 | :bar_chart: | **Fluid Worker Scaling** | Auto-scales 4--210 workers based on real-time CPU, RAM, and GPU utilization |
 | :microscope: | **3-Phase Pipeline** | Extract, Infer, Collapse -- progressively refined label assignment |
@@ -69,16 +69,13 @@ The pipeline uses a **multi-agent swarm** where each GEO experiment (GSE) is han
 
 4. **Phase 1b: Infer** -- For fields still marked `Not Specified`, the pipeline re-infers labels from the full GSE experiment description. Each label column has its own per-label inference agent with GSE context as a KV-cached system prompt.
 
-5. **Phase 2: Collapse** -- The 4-Tier Memory Agent normalizes raw extracted labels to canonical cluster names:
-   - **Step 0:** Abbreviation expansion (deterministic, O(1))
-   - **Step 1:** Cluster map lookup (deterministic, O(1)) -- resolves ~65% of labels
-   - **Step 2:** GSE-dominant fast path -- when >70% of siblings agree
-   - **Step 3:** Single LLM call with candidates + sibling context
-   - **Step 4:** Deterministic fallback (exact/abbreviation match)
-   - **Step 5:** Cluster gate -- if no cluster match, **creates a new cluster** (never reverts a real label to Not Specified)
+5. **Phase 2: Collapse** -- Retrieval-augmented LLM reasoning normalizes raw labels to canonical clusters:
+   - **Step 1: Episodic cache** -- If this raw label was resolved before, return the cached result instantly (<1ms). Handles ~55% of labels on typical platforms.
+   - **Step 2: Semantic retrieval** -- Embed the raw label with [BioLORD-2023](https://huggingface.co/FremyCompany/BioLORD-2023-C) (biomedical SOTA, runs on CPU), find the top-20 most similar canonical clusters from the vocabulary DB via cosine similarity (~17ms).
+   - **Step 3: LLM reasoning** -- `gemma4:e2b` (`think=false`) picks the best canonical cluster from the 20 candidates (~700ms). The LLM preserves specificity (e.g., "Cerebral Cortex" stays as-is, not collapsed to "Brain") while normalizing naming and stripping qualifiers.
    - Results are checkpointed every 1,000 samples
 
-   > **Key design rule:** If Phase 1 extracted a real label (not `Not Specified`), Phase 2 will **never** collapse it back to `Not Specified`. Unmatched labels are registered as new clusters automatically.
+   > **Key design rule:** The collapse preserves specificity -- subtissues, cell types, and cell lines keep their specific canonical names. The LLM only normalizes naming ("HL-60 cell" → "Cell Line: Hl-60 Cells"), strips qualifiers ("Normal Liver" → "Liver"), and expands abbreviations ("AD" → "Alzheimer Disease").
 
 6. **Output** -- Per-platform CSV files are written with repaired labels, full annotations, and collapse reports.
 
