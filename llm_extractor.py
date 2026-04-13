@@ -278,45 +278,8 @@ _NS_INFERENCE_PROMPT_TEMPLATE = (
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PER-LABEL COLLAPSE PROMPTS  (gemma2:2b, Phase 2)
-# Replaces the ReAct multi-turn agent with a SINGLE focused LLM call.
-# Each call receives: extracted label + GSE sibling context + cluster candidates.
-# ─────────────────────────────────────────────────────────────────────────────
-_TISSUE_COLLAPSE_PROMPT = (
-    "Map this tissue label to the best matching cluster name from the candidates.\n"
-    "LABEL: {RAW_LABEL}\n"
-    "CANDIDATES:\n{CANDIDATES}\n"
-    "SIBLINGS:\n{SIBLING_LABELS}\n"
-    "Pick the candidate that best matches the label. Cell type ≠ organ.\n"
-    "If a candidate matches, output that exact candidate name.\n"
-    "If NO candidate matches, output the label exactly as-is: {RAW_LABEL}\n"
-    "One name only:"
-)
-_CONDITION_COLLAPSE_PROMPT = (
-    "Map this condition label to the best matching cluster name from the candidates.\n"
-    "LABEL: {RAW_LABEL}\n"
-    "CANDIDATES:\n{CANDIDATES}\n"
-    "SIBLINGS:\n{SIBLING_LABELS}\n"
-    "Pick the candidate that best matches the label.\n"
-    "If a candidate matches, output that exact candidate name.\n"
-    "If NO candidate matches, output the label exactly as-is: {RAW_LABEL}\n"
-    "One name only:"
-)
-_TREATMENT_COLLAPSE_PROMPT = (
-    "Map this treatment label to the best matching cluster name from the candidates.\n"
-    "LABEL: {RAW_LABEL}\n"
-    "CANDIDATES:\n{CANDIDATES}\n"
-    "SIBLINGS:\n{SIBLING_LABELS}\n"
-    "Pick the candidate that best matches the label. Vehicle/DMSO/PBS = Untreated.\n"
-    "If a candidate matches, output that exact candidate name.\n"
-    "If NO candidate matches, output the label exactly as-is: {RAW_LABEL}\n"
-    "One name only:"
-)
-_PER_LABEL_COLLAPSE_PROMPTS = {
-    "Tissue":    _TISSUE_COLLAPSE_PROMPT,
-    "Condition": _CONDITION_COLLAPSE_PROMPT,
-    "Treatment": _TREATMENT_COLLAPSE_PROMPT,
-}
+# Phase 2 collapse prompts are now built dynamically by
+# CollapseWorker._build_system_prompt() with per-GSE context injection.
 def _parse_json_extraction(text: str, cols: list) -> dict:
     """
     Parse JSON from LLM response.
@@ -3870,7 +3833,7 @@ class GSEWorker:
             return updated
 
         # If Phase 1 already extracted labels, use them — skip LLM extraction
-        # This avoids loading gemma2:2b — only gemma2:9b needed for collapse
+        # Phase 2 collapse uses retrieval + LLM reasoning (same model as extraction)
         if pre_extracted:
             raw_extracted = {c: pre_extracted.get(c, NS) for c in ns_cols}
         else:
@@ -4526,7 +4489,7 @@ class GSEWorker:
         Process every NS sample for this GSE.
         n_threads > 1: samples within this GSE processed in parallel.
         phase1_results: dict {gsm: {col: label}} from Phase 1 — if provided,
-            repair_one skips extraction (no gemma2:2b needed, only 9b for collapse).
+            repair_one skips extraction — collapse uses retrieval + LLM reasoning.
         sample_cb(gsm, current, updated, row_dict) called after each sample.
         Returns list of tuples:
           (gsm, gse, gpl, original_labels, updated_labels, row_dict)
@@ -5798,7 +5761,7 @@ def pipeline(config: dict, q: queue.Queue):
             config.get("_db_platform_mode"))
         # Always run Phase 1 bulk extraction — even in repair mode.
         # This extracts all NS samples with gemma2:2b in parallel FIRST,
-        # then Phase 2 only needs gemma2:9b for collapse (no model swaps).
+        # Phase 2 collapse uses same model as extraction (retrieval + LLM reasoning).
         if True:  # was: if scratch_mode:
             q.put({"type": "show_treatment_bar"})  # unhide Treatment row immediately
             phase1_extracted: Dict[str, Dict[str, str]] = {}  # gsm  {col: label}
@@ -6111,11 +6074,9 @@ def pipeline(config: dict, q: queue.Queue):
                 q.put({"type": "done", "success": True})
                 return
 
-            #  Pre-load collapse model alongside extraction model
-            # Both gemma2:2b (2.4GB) + gemma2:9b (5.4GB) = 7.8GB fit in 11GB VRAM.
-            # OLLAMA_MAX_LOADED_MODELS=2 keeps both loaded — no per-sample swap.
-            # Skip pre-load — model loads on first Phase 2 call automatically
-            log(f"  Skipping model pre-load — {model} will load on first Phase 2 call")
+            # Phase 2 uses same model as extraction — no model swap needed.
+            # BioLORD-2023 embeddings run on CPU (sentence-transformers), no VRAM.
+            log(f"  Phase 2 collapse: {model} + BioLORD-2023 retrieval (CPU)")
 
             # Seed GSEContexts with Phase 1 extracted labels as siblings
             # Only seed GSMs that actually belong to this GSE.
@@ -6345,10 +6306,8 @@ def pipeline(config: dict, q: queue.Queue):
             log(f"  CollapseWorker created — per-GSE working memory + retrieval + LLM")
             log(f"  {len(gse_list):,} GSEs, {_total_samples:,} samples to collapse")
 
-            # Thread-safe wrapper: one GSE at a time per thread, but multiple
-            # GSEs run in parallel. Each thread gets its own CollapseWorker
-            # clone with independent working memory.
-            import copy as _copy
+            # Process one GSE at a time. Samples within each GSE are sequential
+            # so working memory accumulates. Global episodic grows across GSEs.
 
             def _collapse_one_gse(gse_task):
                 gse_id, samples_in_gse = gse_task
@@ -6368,26 +6327,32 @@ def pipeline(config: dict, q: queue.Queue):
                 for (gsm, gse_, gpl, current, row_dict) in samples_in_gse:
                     if stop_evt.is_set():
                         break
-                    raw = raw_map.get(gsm, {})
-                    pre = phase1_extracted.get(gsm)
-                    raw_extracted = pre if pre else {c: current.get(c, NS) for c in _cols}
+                    try:
+                        raw = raw_map.get(gsm, {})
+                        pre = phase1_extracted.get(gsm)
+                        raw_extracted = pre if pre else {c: current.get(c, NS) for c in _cols}
 
-                    updated = dict(current)
-                    audit_map = {}
-                    for col in _cols:
-                        raw_label = raw_extracted.get(col, current.get(col, NS))
-                        final, collapsed, rule, audit = _cw.collapse_field(
-                            gsm=gsm, col=col, raw_label=raw_label,
-                            gse_ctx=gse_ctx, raw=raw, platform=platform_id)
-                        if final and not is_ns(final):
-                            final = final.strip().title()
-                        updated[col] = final
-                        audit_map[col] = audit
+                        updated = dict(current)
+                        audit_map = {}
+                        for col in _cols:
+                            raw_label = raw_extracted.get(col, current.get(col, NS))
+                            final, collapsed, rule, audit = _cw.collapse_field(
+                                gsm=gsm, col=col, raw_label=raw_label,
+                                gse_ctx=gse_ctx, raw=raw, platform=platform_id)
+                            if final and not is_ns(final):
+                                final = final.strip().title()
+                            updated[col] = final
+                            audit_map[col] = audit
 
-                    updated["_audit"] = json.dumps(audit_map)
-                    updated["_agents"] = "CollapseWorker"
-                    _sample_callback(gsm, current, updated, row_dict)
-                    count += 1
+                        updated["_audit"] = json.dumps(audit_map)
+                        updated["_agents"] = "CollapseWorker"
+                        _sample_callback(gsm, current, updated, row_dict)
+                        count += 1
+                    except Exception as _sample_exc:
+                        log(f"  [WARN] {gsm} collapse failed: {_sample_exc}")
+                        # Fall back: keep raw extracted labels
+                        _sample_callback(gsm, current, dict(current), row_dict)
+                        count += 1
 
                 # End GSE — promote working memory to global episodic
                 _cw.end_gse()
