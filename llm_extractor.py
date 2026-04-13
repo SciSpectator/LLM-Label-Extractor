@@ -3382,31 +3382,23 @@ class GSEInferencer:
 
 class CollapseWorker:
     """
-    Phase 2 — Per-label retrieval + LLM reasoning collapse agent.
+    Phase 2 — Per-GSE retrieval-augmented LLM collapse agent with working memory.
 
-    Architecture: For each raw label:
-      1. Episodic cache check (past resolutions, <1ms)
-      2. Local embedding retrieval: find top-20 most similar canonical clusters
-      3. LLM pick: gemma4:e2b (think=false) picks best match from candidates
-      4. Cache result in episodic memory for future reuse
+    Architecture: Each GSE is processed as a unit. Within a GSE:
+      1. Working memory check — resolutions from earlier samples in THIS GSE (<1ms)
+      2. Global episodic cache — resolutions from ALL previous GSEs (<1ms)
+      3. BioLORD-2023 embedding retrieval — top-20 candidates (~17ms)
+      4. LLM pick with GSE context — gemma4:e2b picks best match (~700ms)
+      5. Result cached in working memory + global episodic
 
-    No cluster_map lookup, no fixed top-N list, no cluster gate.
-    Embedding retrieval ensures the LLM always sees the most relevant clusters
-    regardless of frequency rank.
+    Working memory gives the agent experiment awareness:
+    - After resolving "breast tumor" → "Breast" for sample #1, samples #2-100
+      in the same GSE resolve instantly without LLM calls.
+    - GSE context (title, summary) injected into LLM prompt so the agent
+      understands the experiment when disambiguating.
 
-    Model: gemma4:e2b (think=false, ~700ms/label)
+    Model: gemma4:e2b (think=false, ~700ms first encounter, <1ms repeats)
     """
-
-    # Shared system prompt (KV-cached by Ollama)
-    _COLLAPSE_SYSTEM = """You are a biomedical label normalizer. Given a raw label and candidate clusters, pick the BEST match.
-
-Rules:
-- Pick the MOST SPECIFIC matching cluster — preserve specificity
-- Only normalize: standardize names, strip sample IDs, remove "Normal/Control" prefixes
-- Cell lines → their Cell Line: cluster. Cell types → their Cell Type: cluster
-- Abbreviations → expanded form (AD → Alzheimer Disease, HCC → Hepatocellular Carcinoma)
-- If NO candidate is a good match, respond: NEW: [clean canonical name]
-Respond with ONLY the cluster name (or NEW: name)."""
 
     # Garbage patterns to filter from LLM output
     _GARBAGE = ["[clean", "[disease", "thinking process", "**", "based on",
@@ -3420,9 +3412,67 @@ Respond with ONLY the cluster name (or NEW: name)."""
         self.mem_agent = mem_agent
         self.watchdog  = watchdog
         self._log      = log_fn or (lambda m: None)
-        self._episodic = {}  # {(col, raw_lower): canonical}
+        self._episodic = {}  # {(col, raw_lower): canonical} — global across GSEs
         self._cluster_vecs = {}  # {col: (labels, matrix)}
         self._st_model = None  # lazy-loaded sentence-transformers
+        # Per-GSE working memory (set/cleared per GSE)
+        self._working_mem = {}  # {(col, raw_lower): canonical}
+        self._gse_id = None
+        self._gse_title = ""
+        self._gse_summary = ""
+
+    def begin_gse(self, gse_id: str, gse_ctx: "GSEContext" = None):
+        """Initialize working memory for a new GSE experiment."""
+        # Promote working memory to global episodic before clearing
+        if self._working_mem:
+            self._episodic.update(self._working_mem)
+        self._working_mem = {}
+        self._gse_id = gse_id
+        self._gse_title = ""
+        self._gse_summary = ""
+        if gse_ctx:
+            self._gse_title = (gse_ctx.title or "")[:200]
+            self._gse_summary = (gse_ctx.summary or "")[:300]
+
+    def end_gse(self):
+        """Finalize GSE — promote working memory to global episodic."""
+        if self._working_mem:
+            self._episodic.update(self._working_mem)
+            self._working_mem = {}
+        self._gse_id = None
+        self._gse_title = ""
+        self._gse_summary = ""
+
+    def _build_system_prompt(self):
+        """Build system prompt with GSE context for experiment-aware collapse."""
+        parts = [
+            "You are a biomedical label normalizer. Given a raw label and candidate clusters, pick the BEST match.",
+            "",
+            "Rules:",
+            "- Pick the MOST SPECIFIC matching cluster — preserve specificity",
+            "- Only normalize: standardize names, strip sample IDs, remove \"Normal/Control\" prefixes",
+            "- Cell lines → their Cell Line: cluster. Cell types → their Cell Type: cluster",
+            "- Abbreviations → expanded form (AD → Alzheimer Disease, HCC → Hepatocellular Carcinoma)",
+            "- If NO candidate is a good match, respond: NEW: [clean canonical name]",
+        ]
+        # Inject GSE context so the agent understands the experiment
+        if self._gse_title or self._gse_summary:
+            parts.append("")
+            parts.append("Experiment context (use to disambiguate):")
+            if self._gse_title:
+                parts.append(f"  Title: {self._gse_title}")
+            if self._gse_summary:
+                parts.append(f"  Summary: {self._gse_summary}")
+        # Inject working memory (resolutions so far in this GSE)
+        if self._working_mem:
+            recent = list(self._working_mem.items())[-10:]  # last 10 resolutions
+            parts.append("")
+            parts.append("Recent resolutions in this experiment:")
+            for (col, raw), canonical in recent:
+                parts.append(f"  {col}: \"{raw}\" → {canonical}")
+        parts.append("")
+        parts.append("Respond with ONLY the cluster name (or NEW: name).")
+        return "\n".join(parts)
 
     def _get_st(self):
         """Lazy-load sentence-transformers model."""
@@ -3472,7 +3522,8 @@ Respond with ONLY the cluster name (or NEW: name)."""
             return []
 
     def _llm_pick(self, col: str, raw_label: str, candidates: list) -> str:
-        """Ask LLM to pick the best canonical cluster from candidates."""
+        """Ask LLM to pick the best canonical cluster from candidates.
+        System prompt includes GSE context + recent working memory resolutions."""
         if self.watchdog:
             self.watchdog.wait_if_paused()
             self.watchdog.record_call()
@@ -3484,7 +3535,7 @@ Respond with ONLY the cluster name (or NEW: name)."""
             resp = requests.post(f"{self.url}/api/chat", json={
                 "model": self.model, "stream": False,
                 "messages": [
-                    {"role": "system", "content": self._COLLAPSE_SYSTEM},
+                    {"role": "system", "content": self._build_system_prompt()},
                     {"role": "user", "content": user_msg}
                 ],
                 "options": {"temperature": 0, "num_predict": 30, "num_ctx": 2048},
@@ -3501,29 +3552,37 @@ Respond with ONLY the cluster name (or NEW: name)."""
                        gse_ctx: "GSEContext", raw: dict = None,
                        platform: str = "") -> tuple:
         """
-        Collapse one (gsm, col) pair using episodic cache + retrieval + LLM.
+        Collapse one (gsm, col) pair using working memory + episodic + retrieval + LLM.
         Returns (final_label, collapsed: bool, rule: str, audit: dict).
         """
         # NS passthrough
         if is_ns(raw_label) or not raw_label:
             return NS, False, "ns", {"raw": raw_label, "final": NS}
 
-        # 1. Episodic cache — instant (<1ms)
         key = (col, raw_label.lower().strip())
+
+        # 1. Working memory — resolutions from THIS GSE (<1ms)
+        if key in self._working_mem:
+            cached = self._working_mem[key]
+            return cached, True, "working_mem", {
+                "raw": raw_label, "final": cached, "rule": "working_mem"}
+
+        # 2. Global episodic cache — resolutions from ALL GSEs (<1ms)
         if key in self._episodic:
             cached = self._episodic[key]
+            # Also cache in working memory for this GSE
+            self._working_mem[key] = cached
             return cached, True, "episodic", {
                 "raw": raw_label, "final": cached, "rule": "episodic"}
 
-        # 2. Retrieve top-20 candidates via local embedding similarity
+        # 3. Retrieve top-20 candidates via BioLORD-2023 embedding similarity
         candidates = self._retrieve_candidates(col, raw_label, k=20)
 
         if not candidates:
-            # No vectors loaded — fall back to raw label
             return raw_label, False, "no_vectors", {
                 "raw": raw_label, "final": raw_label}
 
-        # 3. LLM picks from candidates (~700ms)
+        # 4. LLM picks from candidates with GSE context (~700ms)
         answer = self._llm_pick(col, raw_label, candidates)
 
         # Clean answer
@@ -3536,7 +3595,6 @@ Respond with ONLY the cluster name (or NEW: name)."""
 
         # Garbage filter
         if any(g in answer.lower() for g in self._GARBAGE) or len(answer) > 60:
-            # Try to extract first phrase
             parts = re.split(r'[,\n;()]', answer)
             cleaned = parts[0].strip().strip('"').rstrip(".")
             if len(cleaned) > 60 or any(g in cleaned.lower() for g in self._GARBAGE):
@@ -3550,21 +3608,25 @@ Respond with ONLY the cluster name (or NEW: name)."""
             answer = raw_label.strip().title()
             rule = "llm_fallback"
 
-        # 4. Cache in episodic memory (multiple normalized forms)
+        # 5. Cache in BOTH working memory and global episodic
+        self._working_mem[key] = answer
         self._episodic[key] = answer
+        # Also cache normalized variants
         for variant in [raw_label.lower(), raw_label.title(),
                         re.sub(r'[-_]', ' ', raw_label.lower()),
                         re.sub(r'\s*\([^)]*\)\s*$', '', raw_label).lower().strip()]:
             vkey = (col, variant.strip())
+            if vkey not in self._working_mem:
+                self._working_mem[vkey] = answer
             if vkey not in self._episodic:
                 self._episodic[vkey] = answer
 
-        # 5. Log to MemoryAgent episodic store (persistent across runs)
+        # 6. Log to MemoryAgent episodic store (persistent across runs)
         ma = self.mem_agent
         if ma and answer != raw_label and not is_ns(answer):
             try:
                 conf = {"llm_match": 0.92, "llm_new": 0.85,
-                        "llm_cleaned": 0.70, "episodic": 0.95}.get(rule, 0.80)
+                        "llm_cleaned": 0.70}.get(rule, 0.80)
                 ma.log_resolution(col, raw_label, answer, conf,
                                   platform=platform,
                                   gse=gse_ctx.gse_id if gse_ctx else "",
@@ -3574,6 +3636,7 @@ Respond with ONLY the cluster name (or NEW: name)."""
 
         audit = {"raw": raw_label, "final": answer,
                  "collapsed": True, "rule": rule,
+                 "gse": self._gse_id or "",
                  "top_candidates": [(c, f"{s:.2f}") for c, s in candidates[:3]]}
         return answer, True, rule, audit
 
@@ -6269,84 +6332,102 @@ def pipeline(config: dict, q: queue.Queue):
             log(f"  ETA estimate: {eta_h}h {eta_m}m "
                 f"({n_rem_samples:,} samples / {num_parallel} workers)")
 
-                        #  Swarm dispatch: CollapseWorker per (gsm, col)
-            # Flat parallel pool — no per-GSE sequential bottleneck.
-            # Each (gsm, col) pair is an independent collapse task.
+                        #  Swarm dispatch: per-GSE CollapseWorkers with working memory
+            # Each GSE processed as a unit — samples sequential within GSE,
+            # GSEs parallel across thread pool. Working memory accumulates
+            # resolutions within each experiment.
             _cw = CollapseWorker(model, ollama_url, mem_agent,
                                  watchdog=watchdog, log_fn=log)
-            # Load cluster vectors for retrieval-based collapse
             for _col in _cols:
                 _cw.load_cluster_vectors(_col)
-            log(f"  CollapseWorker created — per-label retrieval + LLM reasoning")
 
-            # Flatten all samples into (gsm, gse, gpl, current, row_dict) list
-            _all_collapse_tasks = []
-            for gse, samples_in_gse in gse_list:
-                for (gsm, gse_, gpl, current, row_dict) in samples_in_gse:
-                    _all_collapse_tasks.append((gsm, gse_, gpl, current, row_dict))
-            log(f"  {len(_all_collapse_tasks):,} samples to collapse")
+            _total_samples = sum(len(samples) for _, samples in gse_list)
+            log(f"  CollapseWorker created — per-GSE working memory + retrieval + LLM")
+            log(f"  {len(gse_list):,} GSEs, {_total_samples:,} samples to collapse")
 
-            def _collapse_one_sample(task):
-                gsm, gse_, gpl, current, row_dict = task
+            # Thread-safe wrapper: one GSE at a time per thread, but multiple
+            # GSEs run in parallel. Each thread gets its own CollapseWorker
+            # clone with independent working memory.
+            import copy as _copy
+
+            def _collapse_one_gse(gse_task):
+                gse_id, samples_in_gse = gse_task
                 if stop_evt.is_set():
-                    return None
-                raw = raw_map.get(gsm, {})
-                pre = phase1_extracted.get(gsm)
-                gse_ctx = gse_contexts.get(gse_, GSEContext(gse_))
+                    return 0
 
-                # Get Phase 1/1b extracted labels
-                raw_extracted = pre if pre else {c: current.get(c, NS) for c in _cols}
+                # Each thread gets its own worker with shared episodic but
+                # independent working memory
+                # Use the shared _cw (episodic is thread-safe dict reads;
+                # working memory is per-GSE and cleared between GSEs)
+                gse_ctx = gse_contexts.get(gse_id, GSEContext(gse_id))
 
-                updated = dict(current)
-                audit_map = {}
-                for col in _cols:
-                    raw_label = raw_extracted.get(col, current.get(col, NS))
-                    final, collapsed, rule, audit = _cw.collapse_field(
-                        gsm=gsm, col=col, raw_label=raw_label,
-                        gse_ctx=gse_ctx, raw=raw, platform=platform_id)
-                    if final and not is_ns(final):
-                        final = final.strip().title()
-                    updated[col] = final
-                    audit_map[col] = audit
+                # Begin GSE — initialize working memory with experiment context
+                _cw.begin_gse(gse_id, gse_ctx)
 
-                updated["_audit"] = json.dumps(audit_map)
-                updated["_agents"] = "CollapseWorker"
+                count = 0
+                for (gsm, gse_, gpl, current, row_dict) in samples_in_gse:
+                    if stop_evt.is_set():
+                        break
+                    raw = raw_map.get(gsm, {})
+                    pre = phase1_extracted.get(gsm)
+                    raw_extracted = pre if pre else {c: current.get(c, NS) for c in _cols}
 
-                # Save result immediately from worker thread (thread-safe via res_lock)
-                # This prevents the main thread from becoming a bottleneck when
-                # deterministic samples (~80%, <2ms each) finish faster than CSV flush.
-                _sample_callback(gsm, current, updated, row_dict)
-                return gsm
+                    updated = dict(current)
+                    audit_map = {}
+                    for col in _cols:
+                        raw_label = raw_extracted.get(col, current.get(col, NS))
+                        final, collapsed, rule, audit = _cw.collapse_field(
+                            gsm=gsm, col=col, raw_label=raw_label,
+                            gse_ctx=gse_ctx, raw=raw, platform=platform_id)
+                        if final and not is_ns(final):
+                            final = final.strip().title()
+                        updated[col] = final
+                        audit_map[col] = audit
 
-            # Phase 2 uses the SAME shared throttle semaphore as Phase 1/1b
-            # Watchdog._adjust_concurrency was already wired at pipeline start
+                    updated["_audit"] = json.dumps(audit_map)
+                    updated["_agents"] = "CollapseWorker"
+                    _sample_callback(gsm, current, updated, row_dict)
+                    count += 1
 
-            def _collapse_guarded(task):
-                _throttle_sem.acquire()
-                try:
-                    return _collapse_one_sample(task)
-                finally:
-                    _throttle_sem.release()
+                # End GSE — promote working memory to global episodic
+                _cw.end_gse()
+                return count
 
-            # Pool size = num_parallel (matches Ollama slots).
-            # Deterministic samples (<2ms, ~80%) release instantly,
-            # LLM-bound samples (~20%) hold a slot for ~200ms.
-            # No need for more threads than Ollama can serve.
-            _max_pool = min(num_parallel, len(_all_collapse_tasks))
-            _max_pool = max(_max_pool, 8)  # floor: at least 8
-            log(f"  Thread pool: {_max_pool} threads (shared throttle: {_throttle_current[0]} fluid workers)")
-            with ThreadPoolExecutor(max_workers=_max_pool,
-                                    thread_name_prefix="CW") as executor:
-                fut_map = {executor.submit(_collapse_guarded, task): task[0]
-                           for task in _all_collapse_tasks}
+            # Process GSEs: sequential within each GSE (for working memory),
+            # but we process ONE GSE at a time to keep working memory coherent.
+            # The speedup comes from episodic cache growing — later GSEs
+            # resolve most labels without LLM calls.
+            log(f"  Processing GSEs sequentially (working memory per GSE)...")
+            _gse_done = [0]
+            _samples_done = [0]
+            _t0_phase2 = time.time()
 
-                for future in as_completed(fut_map):
-                    submitted_gsm = fut_map[future]
-                    try:
-                        future.result()  # _sample_callback already called in worker
-                    except Exception as exc:
-                        log(f"  [ERROR] {submitted_gsm}: {exc}")
-                        continue
+            for gse_id, samples_in_gse in gse_list:
+                if stop_evt.is_set():
+                    break
+                n = _collapse_one_gse((gse_id, samples_in_gse))
+                _gse_done[0] += 1
+                _samples_done[0] += n
+
+                # Progress update every 10 GSEs or 500 samples
+                if _gse_done[0] % 10 == 0 or _samples_done[0] % 500 < n:
+                    elapsed = time.time() - _t0_phase2
+                    rate = elapsed / max(_samples_done[0], 1)
+                    remaining = _total_samples - _samples_done[0]
+                    eta = rate * remaining
+                    wm_size = len(_cw._working_mem)
+                    ep_size = len(_cw._episodic)
+                    pct = 60 + 40 * _samples_done[0] / max(_total_samples, 1)
+                    prog(pct, f"Phase 2: {_samples_done[0]:,}/{_total_samples:,} "
+                         f"| {_gse_done[0]}/{len(gse_list)} GSEs "
+                         f"| episodic={ep_size:,} "
+                         f"| {rate*1000:.0f}ms/sample "
+                         f"| ETA {eta/60:.0f}min")
+                    log(f"  [{pct:.0f}%] {_samples_done[0]:,}/{_total_samples:,} samples "
+                        f"| {_gse_done[0]}/{len(gse_list)} GSEs "
+                        f"| episodic={ep_size:,} "
+                        f"| {rate*1000:.0f}ms/sample "
+                        f"| ETA {_fmt_eta(eta)}")
 
                     with res_lock:
                         # Log progress every 100 samples
