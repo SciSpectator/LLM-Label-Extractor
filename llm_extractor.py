@@ -767,8 +767,8 @@ class MemoryAgent:
     def _all_forms(text: str) -> List[str]:
         """
         All normalised lookup forms for a raw label.
-        Returns: exact, lowercase, normalised, prefix-stripped variants.
-        Deduplication happens at call site.
+        Returns: exact, lowercase, normalised, prefix-stripped,
+        parenthetical-stripped, suffix-stripped, and plural/singular variants.
         """
         t = text.strip()
         forms = [
@@ -776,40 +776,149 @@ class MemoryAgent:
             t.lower(),
             MemoryAgent._norm_raw(t),
         ]
+        # Strip "Cell Line:", "Cell Type:" etc prefixes
         stripped = MemoryAgent._strip_cell_prefix(t)
         if stripped != t:
             forms += [stripped, stripped.lower(),
                       MemoryAgent._norm_raw(stripped)]
+
+        # Strip parenthetical suffixes: "Abdominal Aortic Aneurysm (AAA)" → "Abdominal Aortic Aneurysm"
+        no_paren = re.sub(r'\s*\([^)]*\)\s*$', '', t).strip()
+        if no_paren and no_paren != t:
+            forms += [no_paren, no_paren.lower(), MemoryAgent._norm_raw(no_paren)]
+
+        # Strip common biomedical suffixes for tissue lookups
+        for suffix in (" cells", " cell", " tissue", " cell line",
+                       " cell lines", " tissues", " sample", " samples",
+                       " biopsy", " biopsies", " specimen"):
+            tl = t.lower()
+            if tl.endswith(suffix) and len(tl) > len(suffix) + 2:
+                base = t[:len(t) - len(suffix)].strip()
+                forms += [base, base.lower(), MemoryAgent._norm_raw(base)]
+
+        # Plural/singular: add trailing 's' or strip it
+        tl = t.lower().strip()
+        if tl.endswith('s') and len(tl) > 3:
+            forms.append(tl[:-1])
+        elif not tl.endswith('s') and len(tl) > 2:
+            forms.append(tl + 's')
+
         return [f for f in forms if f]
 
     def cluster_lookup(self, col: str, raw_label: str) -> Optional[str]:
         """
         Look up raw_label in cluster_map using all normalised forms.
-        Tries exact, lowercase, normalised, prefix-stripped, and
-        singular/plural variants so "MDA-MB-231 CELL" matches
-        "mda mb 231 cells" stored under "Cell Line: Mda-Mb-231 Cells".
+        Tries exact, lowercase, normalised, prefix-stripped, parenthetical-stripped,
+        suffix-stripped, and plural/singular variants.
+        If cluster_map returns a self-mapping (orphan cluster), continues to fuzzy matching.
+        Falls back to case-insensitive matching on semantic_labels cluster names.
         """
         try:
             with self._conn() as c:
-                # All normalised forms including plural/singular variants
+                # All normalised forms
+                first_hit = None
                 for attempt in self._all_forms(raw_label):
                     row = c.execute(
                         "SELECT cluster FROM cluster_map WHERE col=? AND raw=?",
                         (col, attempt)).fetchone()
                     if row:
-                        return row[0]
-                # Case-insensitive cluster name match: CONTROLControl, LIVERLiver
+                        # Check if this cluster is a REAL canonical cluster
+                        # (exists in semantic_labels with an embedding)
+                        is_canon = c.execute(
+                            "SELECT 1 FROM semantic_labels WHERE col=? AND LOWER(label)=LOWER(?) "
+                            "AND embedding IS NOT NULL AND LENGTH(embedding) > 0",
+                            (col, row[0])).fetchone()
+                        if is_canon:
+                            return row[0]
+                        # Self-mapping orphan — save as fallback but keep looking
+                        if first_hit is None:
+                            first_hit = row[0]
+
+                # Case-insensitive cluster name match
                 row = c.execute(
                     "SELECT label FROM semantic_labels "
                     "WHERE col=? AND LOWER(label)=LOWER(?)",
                     (col, raw_label.strip())).fetchone()
                 if row:
                     return row[0]
+
+                # Parenthetical stripping: "Abdominal Aortic Aneurysm (AAA)" → "..."
+                no_paren = re.sub(r'\s*\([^)]*\)\s*$', '', raw_label).strip()
+                if no_paren != raw_label and no_paren:
+                    row = c.execute(
+                        "SELECT label FROM semantic_labels "
+                        "WHERE col=? AND LOWER(label)=LOWER(?)",
+                        (col, no_paren)).fetchone()
+                    if row:
+                        return row[0]
+                    # Also check cluster_map for the cleaned form
+                    for attempt in self._all_forms(no_paren):
+                        row = c.execute(
+                            "SELECT cluster FROM cluster_map WHERE col=? AND raw=?",
+                            (col, attempt)).fetchone()
+                        if row:
+                            is_canon = c.execute(
+                                "SELECT 1 FROM semantic_labels WHERE col=? AND LOWER(label)=LOWER(?) "
+                                "AND embedding IS NOT NULL AND LENGTH(embedding) > 0",
+                                (col, row[0])).fetchone()
+                            if is_canon:
+                                return row[0]
+
+                # Suffix-stripped match: "Alveolar Epithelial Cells" → "Alveolar Epithelial" → "Alveolar"
+                stripped_base = MemoryAgent._strip_cell_prefix(raw_label)
+                for suffix in (" cells", " cell", " tissue", " cell line",
+                               " cell lines", " tissues", " sample", " samples",
+                               " biopsy", " biopsies", "-derived stem cells",
+                               " stem cells", " progenitor cells"):
+                    sl = stripped_base.lower()
+                    if sl.endswith(suffix) and len(sl) > len(suffix) + 2:
+                        base = stripped_base[:len(stripped_base) - len(suffix)].strip()
+                        # Try semantic_labels
+                        row = c.execute(
+                            "SELECT label FROM semantic_labels "
+                            "WHERE col=? AND LOWER(label)=LOWER(?)",
+                            (col, base)).fetchone()
+                        if row:
+                            return row[0]
+                        # Try cluster_map
+                        for attempt in self._all_forms(base):
+                            row = c.execute(
+                                "SELECT cluster FROM cluster_map WHERE col=? AND raw=?",
+                                (col, attempt)).fetchone()
+                            if row:
+                                is_canon = c.execute(
+                                    "SELECT 1 FROM semantic_labels WHERE col=? AND LOWER(label)=LOWER(?)",
+                                    (col, row[0])).fetchone()
+                                if is_canon:
+                                    return row[0]
+
+                # Progressive word stripping from right:
+                # "Alveolar Epithelial Cells" → "Alveolar Epithelial" → "Alveolar"
+                # Stop when we find a canonical match or reach 1 word
+                stripped_base = MemoryAgent._strip_cell_prefix(raw_label)
+                no_p = re.sub(r'\s*\([^)]*\)\s*$', '', stripped_base).strip()
+                words = no_p.split()
+                if len(words) >= 2:
+                    for n_drop in range(1, len(words)):
+                        partial = " ".join(words[:len(words) - n_drop])
+                        if len(partial) < 3:
+                            break
+                        row = c.execute(
+                            "SELECT label FROM semantic_labels "
+                            "WHERE col=? AND LOWER(label)=LOWER(?)",
+                            (col, partial)).fetchone()
+                        if row:
+                            return row[0]
+
+                # Return the first hit even if orphan (better than None)
+                if first_hit is not None:
+                    return first_hit
+
         except Exception:
             pass
         return None
 
-    #  Tier 2: Build / embed 
+    #  Tier 2: Build / embed
         return None
 
     #  Tier 2: Build / embed 
@@ -909,15 +1018,41 @@ class MemoryAgent:
         self._embed_model_detected = MEM_EMBED_MODEL
         return MEM_EMBED_MODEL
 
+    # Lazy-loaded sentence-transformers model (CPU, no VRAM needed)
+    _st_model = None
+    _st_lock  = threading.Lock()
+
+    @classmethod
+    def _get_st_model(cls):
+        """Lazy-load sentence-transformers model on first use."""
+        if cls._st_model is None:
+            with cls._st_lock:
+                if cls._st_model is None:
+                    try:
+                        from sentence_transformers import SentenceTransformer
+                        cls._st_model = SentenceTransformer("all-MiniLM-L6-v2")
+                    except ImportError:
+                        pass
+        return cls._st_model
+
     def _call_embed(self, texts: List[str]) -> "Optional[List[List[float]]]":
         """
-        Try /api/embed (Ollama >= 0.1.26) then /api/embeddings (older Ollama).
-        Auto-detects the best available embedding model from Ollama.
-        Returns list of embedding vectors or None if both endpoints fail.
+        Embed texts using local sentence-transformers (CPU, no VRAM).
+        Falls back to Ollama /api/embed if sentence-transformers unavailable.
         """
+        # Prefer local sentence-transformers (no VRAM competition)
+        st = self._get_st_model()
+        if st is not None:
+            try:
+                vecs = st.encode(texts, batch_size=128, show_progress_bar=False,
+                                 normalize_embeddings=True)
+                return vecs.tolist()
+            except Exception:
+                pass
+
+        # Fallback: Ollama embedding endpoint
         base  = self.ollama_url.rstrip("/")
         model = self._detect_embed_model()
-        # Endpoint 1: /api/embed  batch, modern Ollama
         try:
             resp = requests.post(
                 base + "/api/embed",
@@ -1455,7 +1590,7 @@ def prompt_semantic_collapse(col: str, extracted: str,
 
 
 CKPT_EVERY    = 1000        # checkpoint every N resolved NS samples
-DEFAULT_MODEL = "gemma4:e2b"   # default model — per-label agents with think=false
+DEFAULT_MODEL = "gemma2:2b"   # single model for extraction + collapse — max GPU parallelism
 DEFAULT_URL   = "http://localhost:11434"
 NCBI_WORKERS  = 5
 NCBI_DELAY    = 0.35
@@ -1495,8 +1630,6 @@ MODEL_RAM_GB = {
     "meta-llama-3.1-8b-instruct-q4_k_m.gguf": 5.5,
     "mistral-7b-instruct-v0.3-q4_k_m.gguf":   4.8,
     "qwen2.5-7b-instruct-q4_k_m.gguf":        4.4,
-    #  Gemma 4 edge models (Ollama)
-    "gemma4:e2b":                            7.2,
 }
 DEFAULT_MODEL_GB = 5.4   # assume Q4_K_M for unknowns
 
@@ -2992,7 +3125,8 @@ class AgentTools:
     @staticmethod
     def react_new_cluster(mem_agent, col: str, name: str,
                           raw_label: str, log_fn=None) -> tuple:
-        """Register new cluster. Returns (name, ok, rule)."""
+        """Register new cluster — but first try harder to match existing.
+        Returns (name, ok, rule)."""
         cn = name.strip().rstrip(".")
         ok = (len(cn) >= 2 and not is_ns(cn) and
               not any(w in cn.lower() for w in
@@ -3000,7 +3134,43 @@ class AgentTools:
                        "other", "not ", "mixed")))
         if not ok:
             return None, False, "new_rejected"
+
+        # Last-ditch: before creating a NEW cluster, try fuzzy substring
+        # match against existing cluster names in semantic_labels
         if mem_agent:
+            try:
+                with mem_agent._conn() as c:
+                    cn_lower = cn.lower().strip()
+                    # Strip parentheticals and suffixes for matching
+                    cn_clean = re.sub(r'\s*\([^)]*\)\s*$', '', cn_lower).strip()
+                    for suffix in (" cells", " cell", " tissue", " cell line",
+                                   " cell lines", " tissues"):
+                        if cn_clean.endswith(suffix) and len(cn_clean) > len(suffix) + 2:
+                            cn_clean = cn_clean[:len(cn_clean) - len(suffix)].strip()
+                            break
+
+                    # Try exact match on cleaned form
+                    row = c.execute(
+                        "SELECT label FROM semantic_labels "
+                        "WHERE col=? AND LOWER(label)=LOWER(?)",
+                        (col, cn_clean)).fetchone()
+                    if row:
+                        return row[0], True, "gate_fuzzy_remap"
+
+                    # Try containment: does an existing cluster name contain
+                    # our label or vice versa? (min 4 chars to avoid false positives)
+                    if len(cn_clean) >= 4:
+                        row = c.execute(
+                            "SELECT label FROM semantic_labels "
+                            "WHERE col=? AND LENGTH(label)>=4 "
+                            "AND (LOWER(label) LIKE ? OR ? LIKE '%' || LOWER(label) || '%') "
+                            "ORDER BY LENGTH(label) LIMIT 1",
+                            (col, f"%{cn_clean}%", cn_clean)).fetchone()
+                        if row:
+                            return row[0], True, "gate_contain_remap"
+            except Exception:
+                pass
+
             mem_agent.register_new_cluster(col, cn, raw_label,
                                            log_fn or (lambda m: None))
         return cn, True, "react_new_cluster"
@@ -3212,26 +3382,36 @@ class GSEInferencer:
 
 class CollapseWorker:
     """
-    Phase 2 — Per-sample, per-label collapse agent.
+    Phase 2 — Per-label retrieval + LLM reasoning collapse agent.
 
-    Architecture: 3 independent LLM agents (one per label), each receives:
-      1. The extracted label from Phase 1/1b
-      2. THIS GSE's experiment context only (title/summary/design)
-      3. THIS GSE's sibling labels for THIS column (not other columns)
-      4. Top cluster candidates from semantic search (vocabulary)
-      5. Episodic memory (past resolutions for this label)
+    Architecture: For each raw label:
+      1. Episodic cache check (past resolutions, <1ms)
+      2. Local embedding retrieval: find top-20 most similar canonical clusters
+      3. LLM pick: gemma4:e2b (think=false) picks best match from candidates
+      4. Cache result in episodic memory for future reuse
 
-    Decision cascade per (gsm, col):
-      0. Abbreviation expansion (deterministic)
-      1. Cluster map O(1) (deterministic)
-      2. GSE-dominant fast path (deterministic)
-      3. Single LLM call with GSE context + candidates (replaces ReAct)
-      4. Deterministic fallback
-      5. Cluster gate
+    No cluster_map lookup, no fixed top-N list, no cluster gate.
+    Embedding retrieval ensures the LLM always sees the most relevant clusters
+    regardless of frequency rank.
 
-    One LLM call instead of 3-turn ReAct loop → ~3x faster per label.
-    Model: gemma2:2b
+    Model: gemma4:e2b (think=false, ~700ms/label)
     """
+
+    # Shared system prompt (KV-cached by Ollama)
+    _COLLAPSE_SYSTEM = """You are a biomedical label normalizer. Given a raw label and candidate clusters, pick the BEST match.
+
+Rules:
+- Pick the MOST SPECIFIC matching cluster — preserve specificity
+- Only normalize: standardize names, strip sample IDs, remove "Normal/Control" prefixes
+- Cell lines → their Cell Line: cluster. Cell types → their Cell Type: cluster
+- Abbreviations → expanded form (AD → Alzheimer Disease, HCC → Hepatocellular Carcinoma)
+- If NO candidate is a good match, respond: NEW: [clean canonical name]
+Respond with ONLY the cluster name (or NEW: name)."""
+
+    # Garbage patterns to filter from LLM output
+    _GARBAGE = ["[clean", "[disease", "thinking process", "**", "based on",
+                "respond with", "none of the", "no match", "[unknown",
+                "the raw label", "1.", "2.", "3."]
 
     def __init__(self, model: str, ollama_url: str,
                  mem_agent: "MemoryAgent", watchdog=None, log_fn=None):
@@ -3240,158 +3420,80 @@ class CollapseWorker:
         self.mem_agent = mem_agent
         self.watchdog  = watchdog
         self._log      = log_fn or (lambda m: None)
+        self._episodic = {}  # {(col, raw_lower): canonical}
+        self._cluster_vecs = {}  # {col: (labels, matrix)}
+        self._st_model = None  # lazy-loaded sentence-transformers
 
-    def _llm_single(self, prompt: str, max_tokens: int = 60) -> str:
-        """Single LLM call for collapse — think=false for speed."""
+    def _get_st(self):
+        """Lazy-load sentence-transformers model."""
+        if self._st_model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                self._st_model = SentenceTransformer("all-MiniLM-L6-v2")
+            except ImportError:
+                self._log("  [CollapseWorker] sentence-transformers not available")
+        return self._st_model
+
+    def load_cluster_vectors(self, col: str):
+        """Load cluster embeddings from DB into RAM for one column."""
+        if col in self._cluster_vecs:
+            return
+        ma = self.mem_agent
+        if not ma:
+            return
+        try:
+            import numpy as _np
+            with ma._conn() as c:
+                rows = c.execute(
+                    "SELECT label, embedding FROM semantic_labels "
+                    "WHERE col=? AND embedding IS NOT NULL", (col,)).fetchall()
+            if not rows:
+                return
+            labels = [r[0] for r in rows]
+            vecs = _np.stack([_np.frombuffer(r[1], dtype=_np.float32) for r in rows])
+            self._cluster_vecs[col] = (labels, vecs)
+            self._log(f"  [CollapseWorker] {col}: {len(labels)} cluster vectors loaded")
+        except Exception as e:
+            self._log(f"  [CollapseWorker] {col}: vector load failed: {e}")
+
+    def _retrieve_candidates(self, col: str, raw_label: str, k: int = 20):
+        """Retrieve top-k most similar canonical clusters for a raw label using local embeddings."""
+        st = self._get_st()
+        if st is None or col not in self._cluster_vecs:
+            return []
+        try:
+            import numpy as _np
+            labels, mat = self._cluster_vecs[col]
+            vec = st.encode([raw_label], normalize_embeddings=True)[0]
+            sims = mat @ vec
+            top_idx = _np.argsort(sims)[::-1][:k]
+            return [(labels[i], float(sims[i])) for i in top_idx]
+        except Exception:
+            return []
+
+    def _llm_pick(self, col: str, raw_label: str, candidates: list) -> str:
+        """Ask LLM to pick the best canonical cluster from candidates."""
         if self.watchdog:
             self.watchdog.wait_if_paused()
             self.watchdog.record_call()
-        return _llm_call_think_off(self.model, prompt, self.url,
-                                    max_tokens=max_tokens)
 
-    # ── Deterministic memory paths (no LLM) ─────────────────────────────
+        cand_str = "\n".join(f"  - {c} ({s:.2f})" for c, s in candidates)
+        user_msg = f'Raw: "{raw_label}"\nCandidates:\n{cand_str}\nBest:'
 
-    def _try_cluster_map(self, col: str, label: str) -> Optional[str]:
-        """Tier 0: O(1) direct lookup."""
-        if not self.mem_agent or is_ns(label):
-            return None
-        d = self.mem_agent.cluster_lookup(col, label)
-        return d if (d and self.mem_agent.is_cluster_name(col, d)) else None
-
-    def _try_abbreviation_expand(self, col: str, label: str,
-                                  raw: dict = None,
-                                  gse_ctx: "GSEContext" = None) -> Optional[str]:
-        """Expand short abbreviations by matching initials of cluster names.
-        e.g. 'Ds' → 'DOWN SYNDROME', 'AD' → 'ALZHEIMER DISEASE'.
-        When multiple candidates match, uses raw metadata + GSE context to
-        disambiguate by checking which cluster name appears in the text."""
-        ma = self.mem_agent
-        if not ma:
-            return None
-        compact = _compact(label)  # e.g. "ds"
-        if len(compact) < 2:
-            return None
         try:
-            with ma._conn() as c:
-                rows = c.execute(
-                    "SELECT DISTINCT label FROM semantic_labels WHERE col=?",
-                    (col,)).fetchall()
-                candidates = []
-                for (cname,) in rows:
-                    ci = _initials(cname)
-                    if ci == compact and len(ci) >= 2:
-                        candidates.append(cname)
-                if len(candidates) == 1:
-                    return candidates[0]
-                if len(candidates) < 2:
-                    return None
-                # Multiple candidates — disambiguate using raw metadata text
-                # Build a searchable text blob from all available context
-                text_parts = []
-                if raw:
-                    for v in raw.values():
-                        if isinstance(v, str):
-                            text_parts.append(v.lower())
-                if gse_ctx:
-                    if gse_ctx.title:   text_parts.append(gse_ctx.title.lower())
-                    if gse_ctx.summary: text_parts.append(gse_ctx.summary.lower())
-                    if gse_ctx.design:  text_parts.append(gse_ctx.design.lower())
-                search_text = " ".join(text_parts)
-                if not search_text:
-                    return None
-                # Score each candidate: how many words appear in the context
-                scored = []
-                for cname in candidates:
-                    words = _norm(cname).split()
-                    if not words:
-                        continue
-                    hits = sum(1 for w in words if len(w) >= 3 and w in search_text)
-                    score = hits / len(words)
-                    scored.append((cname, score, hits))
-                scored.sort(key=lambda x: (-x[1], -x[2]))
-                # Only pick if top candidate clearly wins (>0 hits AND beats runner-up)
-                if scored and scored[0][2] > 0:
-                    if len(scored) == 1 or scored[0][1] > scored[1][1]:
-                        return scored[0][0]
+            resp = requests.post(f"{self.url}/api/chat", json={
+                "model": self.model, "stream": False,
+                "messages": [
+                    {"role": "system", "content": self._COLLAPSE_SYSTEM},
+                    {"role": "user", "content": user_msg}
+                ],
+                "options": {"temperature": 0, "num_predict": 30, "num_ctx": 2048},
+                "think": False,
+            }, timeout=30)
+            resp.raise_for_status()
+            return resp.json().get("message", {}).get("content", "").strip()
         except Exception:
-            pass
-        return None
-
-    def _try_gse_dominant(self, col: str, ctx_counts: Dict[str, int]) -> Optional[str]:
-        """GSE fast path: >70% sibling agreement."""
-        if not ctx_counts: return None
-        top, cnt = max(ctx_counts.items(), key=lambda x: x[1])
-        tot = sum(ctx_counts.values())
-        if tot > 0 and cnt / tot >= 0.70 and self.mem_agent:
-            if self.mem_agent.is_cluster_name(col, top): return top
-        return None
-
-    def _try_gse_rescue(self, col: str, ctx_counts: Dict[str, int]) -> Optional[str]:
-        """Rescue NS from dominant sibling (≥50% or ≥30% + remap)."""
-        if not ctx_counts or not self.mem_agent: return None
-        _dom = max(ctx_counts, key=ctx_counts.get)
-        _tot = sum(ctx_counts.values())
-        _pct = ctx_counts[_dom] / _tot if _tot else 0
-        if _pct >= 0.5 and self.mem_agent.is_cluster_name(col, _dom): return _dom
-        if _pct >= 0.3:
-            c = self.mem_agent.cluster_lookup(col, _dom)
-            if c and self.mem_agent.is_cluster_name(col, c): return c
-        return None
-
-    # ── Single LLM collapse call (replaces ReAct multi-turn) ────────────
-
-    def _run_llm_collapse(self, gsm, col, out1, ctx_counts,
-                          gse_ctx, raw) -> tuple:
-        """Single LLM call per (gsm, col) — candidates + siblings only.
-        Lean prompt: no sample metadata or GSE summary (just noise for collapse).
-        The LLM only needs to pick from candidates or echo the label back."""
-        ma = self.mem_agent
-
-        # Sibling labels for THIS column in THIS GSE
-        sibling_str = "none"
-        if ctx_counts:
-            sibling_str = "\n".join(
-                f"  {l}: {c} samples"
-                for l, c in sorted(ctx_counts.items(), key=lambda x: -x[1])[:10])
-
-        # Cluster candidates from semantic search + direct lookup
-        candidates_str = "none"
-        if ma and ma.is_ready(col) and not is_ns(out1):
-            hits = ma.semantic_search(col, out1, k=8)
-            d = ma.cluster_lookup(col, out1)
-            if d and not any(l == d for l, _ in hits):
-                hits = [(d, 1.0)] + hits
-            if hits:
-                ranked = _rank_candidates_by_specificity(out1, hits)
-                candidates_str = "\n".join(
-                    f"  {cl}"
-                    for cl, sim, _ in ranked[:8])
-
-        # Build the lean collapse prompt
-        prompt = (_PER_LABEL_COLLAPSE_PROMPTS[col]
-            .replace("{RAW_LABEL}", out1 or NS)
-            .replace("{SIBLING_LABELS}", sibling_str)
-            .replace("{CANDIDATES}", candidates_str))
-
-        text = self._llm_single(prompt, max_tokens=60)
-        answer = _parse_single_label(text)
-
-        if answer and not is_ns(answer):
-            # Validate against cluster vocabulary
-            if ma and ma.is_cluster_name(col, answer):
-                return answer, True, "llm_collapse"
-            if ma:
-                r = ma.cluster_lookup(col, answer)
-                if r and ma.is_cluster_name(col, r):
-                    return r, True, "llm_collapse+remap"
-            # Not in vocabulary but LLM gave a real answer — register as new
-            if (ma and len(answer) >= 4 and not is_ns(answer) and
-                    not any(w in answer.lower() for w in
-                            ("unknown", "unspecified", "n/a", "none",
-                             "other", "not ", "mixed"))):
-                ma.register_new_cluster(col, answer, out1, self._log)
-                return answer, True, "llm_new_cluster"
-        return out1, False, "llm_no_match"
+            return raw_label
 
     # ── Main entry point ─────────────────────────────────────────────────
 
@@ -3399,104 +3501,81 @@ class CollapseWorker:
                        gse_ctx: "GSEContext", raw: dict = None,
                        platform: str = "") -> tuple:
         """
-        Full decision cascade for one (gsm, col) pair.
-        Each label has its OWN independent agent with its OWN GSE context.
+        Collapse one (gsm, col) pair using episodic cache + retrieval + LLM.
         Returns (final_label, collapsed: bool, rule: str, audit: dict).
         """
+        # NS passthrough
+        if is_ns(raw_label) or not raw_label:
+            return NS, False, "ns", {"raw": raw_label, "final": NS}
+
+        # 1. Episodic cache — instant (<1ms)
+        key = (col, raw_label.lower().strip())
+        if key in self._episodic:
+            cached = self._episodic[key]
+            return cached, True, "episodic", {
+                "raw": raw_label, "final": cached, "rule": "episodic"}
+
+        # 2. Retrieve top-20 candidates via local embedding similarity
+        candidates = self._retrieve_candidates(col, raw_label, k=20)
+
+        if not candidates:
+            # No vectors loaded — fall back to raw label
+            return raw_label, False, "no_vectors", {
+                "raw": raw_label, "final": raw_label}
+
+        # 3. LLM picks from candidates (~700ms)
+        answer = self._llm_pick(col, raw_label, candidates)
+
+        # Clean answer
+        answer = answer.strip().strip('"').strip("'").rstrip(".")
+        rule = "llm_match"
+
+        if answer.upper().startswith("NEW:"):
+            answer = answer[4:].strip().strip('"').strip("'").rstrip(".")
+            rule = "llm_new"
+
+        # Garbage filter
+        if any(g in answer.lower() for g in self._GARBAGE) or len(answer) > 60:
+            # Try to extract first phrase
+            parts = re.split(r'[,\n;()]', answer)
+            cleaned = parts[0].strip().strip('"').rstrip(".")
+            if len(cleaned) > 60 or any(g in cleaned.lower() for g in self._GARBAGE):
+                answer = raw_label.strip().title()
+                rule = "llm_cleaned"
+            else:
+                answer = cleaned
+                rule = "llm_cleaned"
+
+        if not answer or len(answer) < 2:
+            answer = raw_label.strip().title()
+            rule = "llm_fallback"
+
+        # 4. Cache in episodic memory (multiple normalized forms)
+        self._episodic[key] = answer
+        for variant in [raw_label.lower(), raw_label.title(),
+                        re.sub(r'[-_]', ' ', raw_label.lower()),
+                        re.sub(r'\s*\([^)]*\)\s*$', '', raw_label).lower().strip()]:
+            vkey = (col, variant.strip())
+            if vkey not in self._episodic:
+                self._episodic[vkey] = answer
+
+        # 5. Log to MemoryAgent episodic store (persistent across runs)
         ma = self.mem_agent
-        out1 = raw_label
-
-        # Capitalisation normalisation
-        if ma and out1 and not is_ns(out1):
-            cased = ma.cluster_lookup(col, out1)
-            if cased: out1 = cased
-
-        ctx_labels = list(gse_ctx.label_counts[col].keys()) if gse_ctx else []
-        ctx_counts = dict(gse_ctx.label_counts[col]) if gse_ctx else {}
-
-        # GSE rescue for NS
-        if is_ns(out1) and ctx_counts:
-            rescued = self._try_gse_rescue(col, ctx_counts)
-            if rescued: out1 = rescued
-
-        if (is_ns(out1) or not out1) and not ctx_labels and not ma:
-            return NS, False, "no_evidence", {"raw": raw_label, "final": NS}
-
-        final, collapsed, rule = out1, False, ""
-
-        # 0. Abbreviation expansion: short labels (2-4 chars) → match initials
-        if (not collapsed and ma and not is_ns(out1)
-                and 2 <= len(out1.strip()) <= 4):
-            expanded = self._try_abbreviation_expand(col, out1, raw, gse_ctx)
-            if expanded:
-                out1 = expanded
-                final, collapsed, rule = expanded, True, "abbreviation_expand"
-
-        # 1. Direct cluster map O(1)
-        d = self._try_cluster_map(col, out1)
-        if d: final, collapsed, rule = d, True, "direct_cluster_map"
-
-        # 2. GSE-dominant
-        if not collapsed:
-            d = self._try_gse_dominant(col, ctx_counts)
-            if d: final, collapsed, rule = d, True, "gse_dominant"
-
-        # 3. Single LLM collapse call (replaces ReAct multi-turn agent)
-        #    Each label gets its OWN LLM call with THIS GSE's context only
-        if not collapsed and ma and not is_ns(out1):
-            final, collapsed, rule = self._run_llm_collapse(
-                gsm, col, out1, ctx_counts, gse_ctx, raw or {})
-
-        # 4. Deterministic fallback
-        if not collapsed and ctx_labels:
-            matched, drule = phase15_collapse(out1, ctx_labels)
-            if matched and matched != out1:
-                if ma and not ma.is_cluster_name(col, matched):
-                    r = ma.cluster_lookup(col, matched)
-                    matched = r if (r and ma.is_cluster_name(col, r)) else None
-                if matched: final, collapsed, rule = matched, True, drule
-
-        # 5. Cluster gate — NEVER collapse a real label back to NS
-        _has_vocab = ma and ma.is_ready(col)
-        if _has_vocab:
-            if final and not is_ns(final) and not ma.is_cluster_name(col, final):
-                r = ma.cluster_lookup(col, final)
-                if r and ma.is_cluster_name(col, r):
-                    final, rule = r, rule or "gate_remap"
-                else:
-                    # No cluster match — register as a NEW cluster instead of rejecting
-                    _new, _ok, _nr = AgentTools.react_new_cluster(
-                        ma, col, final, raw_label)
-                    if _ok and _new:
-                        final, collapsed, rule = _new, True, "gate_new_cluster"
-                    else:
-                        # Keep the extracted label as-is (never revert to NS)
-                        rule = rule or "gate_passthrough"
-        else:
-            # No vocabulary — snap to dominant sibling form
-            if final and not is_ns(final) and ctx_counts:
-                _n = final.lower().strip()
-                for sib, _ in sorted(ctx_counts.items(), key=lambda x: -x[1]):
-                    if sib.lower().strip() in _n or _n in sib.lower().strip():
-                        final = sib; break
-
-        # Episodic log
-        if collapsed and ma and final and not is_ns(final) and final != raw_label:
+        if ma and answer != raw_label and not is_ns(answer):
             try:
-                conf = {"direct_cluster_map": 0.95, "gse_dominant": 0.92,
-                        "llm_collapse": 0.90, "llm_collapse+remap": 0.90,
-                        "llm_new_cluster": 0.85, "exact_match": 0.92,
-                        "abbreviation_match": 0.90}.get(rule, 0.80)
-                ma.log_resolution(col, raw_label, final, conf,
+                conf = {"llm_match": 0.92, "llm_new": 0.85,
+                        "llm_cleaned": 0.70, "episodic": 0.95}.get(rule, 0.80)
+                ma.log_resolution(col, raw_label, answer, conf,
                                   platform=platform,
                                   gse=gse_ctx.gse_id if gse_ctx else "",
                                   gsm=gsm, rule=rule)
-            except Exception: pass
+            except Exception:
+                pass
 
-        audit = {"raw": raw_label, "final": final or NS,
-                 "collapsed": collapsed, "rule": rule,
-                 "context_labels": ctx_labels[:5]}
-        return final or NS, collapsed, rule, audit
+        audit = {"raw": raw_label, "final": answer,
+                 "collapsed": True, "rule": rule,
+                 "top_candidates": [(c, f"{s:.2f}") for c, s in candidates[:3]]}
+        return answer, True, rule, audit
 
 
 #
@@ -4472,7 +4551,7 @@ class Watchdog:
     # ── Fluid scaling parameters ──
     SCALE_DOWN_FACTOR = 0.5   # multiply current workers by this when above threshold
     SCALE_UP_STEP     = 1     # add this many workers when below threshold
-    MIN_WORKERS       = 1     # never go below this (3 = one per column)
+    MIN_WORKERS       = 8     # minimum workers floor
     SCALE_COOLDOWN_S  = 5     # seconds between scale adjustments
     _CONFIG_RELOAD_EVERY = 5  # reload config every N watchdog ticks
 
@@ -5110,12 +5189,6 @@ def pipeline(config: dict, q: queue.Queue):
         harmonized_dir = config["harmonized_dir"]
         limit          = config["limit"]
         output_dir     = harmonized_dir
-
-        # Allow overriding the extraction model from config
-        global EXTRACTION_MODEL
-        ext_model = config.get("extraction_model", "").strip()
-        if ext_model:
-            EXTRACTION_MODEL = ext_model
 
         # Unique timestamp for this run  appended to every output/checkpoint
         # so re-runs never overwrite previous results.
@@ -5956,6 +6029,25 @@ def pipeline(config: dict, q: queue.Queue):
                 except Exception:
                     pass
 
+            # ── Skip Phase 2 if requested ──
+            if config.get("skip_phase2", False):
+                log(f"\n✅ Phase 1 + 1b complete — skipping Phase 2 (skip_phase2=True)")
+                log(f"  Phase 1 checkpoint: {_p1_ckpt}")
+                _gsm2gse = dict(zip(target["gsm"], target["series_id"]))
+                import json as _json2
+                _p1_only = os.path.join(run_dir, "checkpoints", "phase1_only_extracted.json")
+                _p1_combined = os.path.join(run_dir, "checkpoints", "phase1_extracted.json")
+                for src, name in [(_p1_only, "labels_raw.csv"), (_p1_combined, "labels_phase1b.csv")]:
+                    if os.path.isfile(src):
+                        with open(src) as _f:
+                            _data = _json2.load(_f)
+                        _rows = [{"gsm": g, "series_id": _gsm2gse.get(g, ""),
+                                  **{c: _data.get(g, {}).get(c, NS) for c in _cols}} for g in _data]
+                        pd.DataFrame(_rows).to_csv(os.path.join(run_dir, name), index=False)
+                        log(f"  Saved {name} ({len(_rows):,} rows)")
+                q.put({"type": "done", "success": True})
+                return
+
             #  Pre-load collapse model alongside extraction model
             # Both gemma2:2b (2.4GB) + gemma2:9b (5.4GB) = 7.8GB fit in 11GB VRAM.
             # OLLAMA_MAX_LOADED_MODELS=2 keeps both loaded — no per-sample swap.
@@ -6182,7 +6274,10 @@ def pipeline(config: dict, q: queue.Queue):
             # Each (gsm, col) pair is an independent collapse task.
             _cw = CollapseWorker(model, ollama_url, mem_agent,
                                  watchdog=watchdog, log_fn=log)
-            log(f"  CollapseWorker created — flat parallel over all (gsm, col) pairs")
+            # Load cluster vectors for retrieval-based collapse
+            for _col in _cols:
+                _cw.load_cluster_vectors(_col)
+            log(f"  CollapseWorker created — per-label retrieval + LLM reasoning")
 
             # Flatten all samples into (gsm, gse, gpl, current, row_dict) list
             _all_collapse_tasks = []
