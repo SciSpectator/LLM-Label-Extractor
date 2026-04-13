@@ -51,34 +51,6 @@
 
 ---
 
-## Model Selection: gemma2:2b vs gemma4:e2b
-
-The pipeline supports two LLM backends. You can select the model in the GUI dropdown, or set it in the configuration files.
-
-| | gemma2:2b | gemma4:e2b (default) |
-|---|---|---|
-| **Parameters** | 2 Billion | 2 Billion (Edge) |
-| **VRAM** | 2.0 GB | 7.2 GB |
-| **Phase 1 Speed** | ~174 ms/sample | ~0.88s/sample |
-| **Architecture** | Single combined prompt | 3 per-label agents (parallel) |
-| **Reasoning** | Standard | `think=false` (no CoT overhead) |
-| **Context Window** | Default | `num_ctx=512` (tight, per-call) |
-| **Best For** | Low-VRAM setups, maximum throughput | Better reasoning, domain-specific prompts |
-
-### When to use gemma4:e2b
-
-- You have **4+ GB VRAM** available (7.2 GB recommended)
-- You want **higher accuracy** on complex metadata (per-label prompts are more domain-specific)
-- You want the **latest Gemma 4** model architecture with improved reasoning
-
-### When to use gemma2:2b
-
-- You have **limited VRAM** (2 GB minimum)
-- You want **maximum throughput** (faster per-sample processing)
-- You are running on **CPU-only** hardware
-
----
-
 ## Agent Workflow
 
 The pipeline uses a **multi-agent swarm** where each GEO experiment (GSE) is handled by an independent worker agent. Here is the step-by-step workflow:
