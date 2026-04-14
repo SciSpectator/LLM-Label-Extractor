@@ -2,418 +2,396 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>TAILS Pipeline — Complete Technical Workflow</title>
+<title>TAILS — Complete Pipeline Workflow</title>
 <style>
 :root {
-  --bg: #0f172a; --bg2: #1e293b; --bg3: #334155;
-  --text: #e2e8f0; --text2: #94a3b8; --accent: #3b82f6;
-  --green: #10b981; --orange: #f97316; --purple: #8b5cf6;
-  --red: #ef4444; --yellow: #eab308; --cyan: #06b6d4;
+  --bg:#0f172a;--bg2:#1e293b;--bg3:#334155;
+  --text:#e2e8f0;--text2:#94a3b8;--accent:#3b82f6;
+  --green:#10b981;--orange:#f97316;--purple:#8b5cf6;
+  --red:#ef4444;--yellow:#eab308;--cyan:#06b6d4;--pink:#ec4899;
 }
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
-.container { max-width: 1200px; margin: 0 auto; padding: 40px 20px; }
-h1 { text-align: center; font-size: 2.2em; margin-bottom: 8px; background: linear-gradient(135deg, var(--accent), var(--purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.subtitle { text-align: center; color: var(--text2); margin-bottom: 40px; font-size: 1.1em; }
-h2 { color: var(--accent); font-size: 1.5em; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--bg3); }
-h3 { color: var(--green); font-size: 1.15em; margin: 24px 0 10px; }
-h4 { color: var(--orange); font-size: 1em; margin: 16px 0 8px; }
-
-.card { background: var(--bg2); border-radius: 12px; padding: 24px; margin: 16px 0; border: 1px solid var(--bg3); }
-.card.phase1 { border-left: 4px solid var(--accent); }
-.card.phase1b { border-left: 4px solid var(--purple); }
-.card.phase2 { border-left: 4px solid var(--orange); }
-.card.memory { border-left: 4px solid var(--green); }
-.card.agent { border-left: 4px solid var(--cyan); }
-
-.phase-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.8em; font-weight: 700; margin-right: 8px; }
-.p1 { background: var(--accent); color: white; }
-.p1b { background: var(--purple); color: white; }
-.p2 { background: var(--orange); color: white; }
-
-.flow { display: flex; align-items: center; gap: 12px; margin: 16px 0; flex-wrap: wrap; }
-.flow-step { background: var(--bg3); padding: 10px 16px; border-radius: 8px; font-size: 0.9em; min-width: 140px; text-align: center; }
-.flow-arrow { color: var(--text2); font-size: 1.4em; }
-
-.prompt-box { background: #0c1222; border: 1px solid var(--bg3); border-radius: 8px; padding: 16px; font-family: 'Fira Code', monospace; font-size: 0.85em; line-height: 1.5; white-space: pre-wrap; overflow-x: auto; margin: 12px 0; color: #a5f3fc; }
-.prompt-label { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 700; margin-bottom: 8px; }
-.sys { background: var(--purple); color: white; }
-.usr { background: var(--accent); color: white; }
-
-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.9em; }
-th { background: var(--bg3); padding: 10px 14px; text-align: left; font-weight: 600; }
-td { padding: 10px 14px; border-bottom: 1px solid var(--bg3); }
-tr:hover { background: rgba(59,130,246,0.05); }
-
-.metric { display: inline-block; background: var(--bg3); padding: 6px 14px; border-radius: 6px; margin: 4px; font-size: 0.9em; }
-.metric .val { font-weight: 700; color: var(--green); }
-
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
-
-.tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600; }
-.tag-model { background: #fef3c7; color: #92400e; }
-.tag-speed { background: #d1fae5; color: #065f46; }
-.tag-memory { background: #ede9fe; color: #5b21b6; }
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.65}
+.c{max-width:1200px;margin:0 auto;padding:40px 20px}
+h1{text-align:center;font-size:2.4em;margin-bottom:6px;background:linear-gradient(135deg,var(--accent),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.sub{text-align:center;color:var(--text2);margin-bottom:50px;font-size:1.05em}
+h2{color:var(--accent);font-size:1.5em;margin:50px 0 16px;padding-bottom:8px;border-bottom:2px solid var(--bg3)}
+h3{color:var(--green);font-size:1.1em;margin:20px 0 10px}
+h4{color:var(--orange);font-size:0.95em;margin:16px 0 8px}
+.card{background:var(--bg2);border-radius:12px;padding:24px;margin:16px 0;border:1px solid var(--bg3)}
+.b1{border-left:4px solid var(--accent)}.b1b{border-left:4px solid var(--purple)}
+.b1c{border-left:4px solid var(--red)}.b2{border-left:4px solid var(--orange)}
+.bm{border-left:4px solid var(--green)}.ba{border-left:4px solid var(--cyan)}
+.badge{display:inline-block;padding:3px 10px;border-radius:16px;font-size:.78em;font-weight:700;color:#fff;margin-right:6px}
+.flow{display:flex;align-items:center;gap:10px;margin:16px 0;flex-wrap:wrap}
+.fs{background:var(--bg3);padding:10px 14px;border-radius:8px;font-size:.88em;min-width:120px;text-align:center;border:1px solid transparent}
+.fa{color:var(--text2);font-size:1.3em;flex-shrink:0}
+.prompt{background:#0c1222;border:1px solid var(--bg3);border-radius:8px;padding:16px;font-family:'Fira Code',monospace;font-size:.82em;line-height:1.5;white-space:pre-wrap;overflow-x:auto;margin:12px 0;color:#a5f3fc}
+.pl{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.73em;font-weight:700;margin-bottom:8px;color:#fff}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:.88em}
+th{background:var(--bg3);padding:10px 14px;text-align:left;font-weight:600}
+td{padding:10px 14px;border-bottom:1px solid var(--bg3)}
+.m{display:inline-block;background:var(--bg3);padding:5px 12px;border-radius:6px;margin:3px;font-size:.88em}
+.m .v{font-weight:700;color:var(--green)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:768px){.grid{grid-template-columns:1fr}}
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.73em;font-weight:600}
+.tm{background:#fef3c7;color:#92400e}.ts{background:#d1fae5;color:#065f46}.tmem{background:#ede9fe;color:#5b21b6}
 </style>
 </head>
 <body>
-<div class="container">
+<div class="c">
 
 <h1>TAILS Pipeline — Complete Technical Workflow</h1>
-<p class="subtitle">Tissue, condItion &amp; treatment Label extraction System<br>
+<p class="sub">Tissue, condItion &amp; treatment Label extraction System v2.1<br>
 Retrieval-Augmented Multi-Agent Pipeline for GEO Metadata Normalization</p>
 
-<!-- ═══════════════════════════════════════════════════════════ -->
-<h2>Pipeline Overview</h2>
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>1. Pipeline Overview</h2>
+
 <div class="flow">
-  <div class="flow-step" style="border:2px solid var(--accent)">📥 GEOmetadb<br><small>SQLite ~19GB</small></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border:2px solid var(--accent)"><span class="phase-badge p1">Phase 1</span><br>Extract</div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border:2px solid var(--purple)"><span class="phase-badge p1b">Phase 1b</span><br>NS Infer</div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border:2px solid var(--red)"><span class="phase-badge" style="background:var(--red)">Phase 1c</span><br>Full Re-extract</div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border:2px solid var(--orange)"><span class="phase-badge p2">Phase 2</span><br>Collapse</div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border:2px solid var(--green)">📁 Output<br><small>CSV files</small></div>
+<div class="fs" style="border-color:var(--text2)">📥 GEOmetadb<br><small>~19GB SQLite</small></div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--accent)"><span class="badge" style="background:var(--accent)">P1</span>Extract<br><small>~1.3s/sample</small></div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--purple)"><span class="badge" style="background:var(--purple)">P1b</span>NS Infer<br><small>~0.5s/sample</small></div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--red)"><span class="badge" style="background:var(--red)">P1c</span>Full Re-extract<br><small>~2.5s/sample</small></div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--orange)"><span class="badge" style="background:var(--orange)">P2</span>Collapse<br><small>~700ms/unique</small></div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--green)">📁 Output CSVs</div>
 </div>
 
 <table>
 <tr><th>Component</th><th>Technology</th><th>Purpose</th></tr>
-<tr><td>LLM Engine</td><td><span class="tag tag-model">gemma4:e2b</span> Google Gemma 4 Edge, 5.1B params</td><td>All extraction + collapse + judging</td></tr>
-<tr><td>LLM Server</td><td>Ollama (local, GPU)</td><td>think=false, T=0, deterministic</td></tr>
-<tr><td>Embedding Model</td><td><span class="tag tag-model">BioLORD-2023</span> 768-dim, UMLS-trained</td><td>Phase 2 semantic retrieval (CPU)</td></tr>
-<tr><td>Memory DB</td><td>biomedical_memory.db (SQLite)</td><td>7,268 canonical clusters + KG triples</td></tr>
-<tr><td>Worker Scaling</td><td>Watchdog (fluid 4–210 workers)</td><td>Real-time CPU/RAM/GPU monitoring</td></tr>
+<tr><td>LLM Engine</td><td><span class="tag tm">gemma4:e2b</span> 5.1B params, think=false, T=0</td><td>All extraction, inference, collapse, judging</td></tr>
+<tr><td>LLM Server</td><td>Ollama (local GPU, 20 parallel slots)</td><td>Deterministic inference, KV caching</td></tr>
+<tr><td>Embeddings</td><td><span class="tag tm">BioLORD-2023</span> 768-dim, UMLS-trained</td><td>Phase 2 semantic retrieval (CPU, no VRAM)</td></tr>
+<tr><td>Memory DB</td><td>biomedical_memory.db (SQLite)</td><td>7,268 clusters + 17K KG triples</td></tr>
+<tr><td>Scaling</td><td>Watchdog (fluid 4–210 workers)</td><td>Real-time CPU/RAM/GPU/temp monitoring</td></tr>
 </table>
 
-<!-- ═══════════════════════════════════════════════════════════ -->
-<h2><span class="phase-badge p1">Phase 1</span> Raw Extraction</h2>
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>2. <span class="badge" style="background:var(--accent)">Phase 1</span> Raw Extraction</h2>
 
-<div class="card phase1">
-<h3>Architecture: 3 Independent Per-Label Agents</h3>
-<p>Each sample is processed by <strong>3 parallel agents</strong> — one for Tissue, one for Condition, one for Treatment. Agents run as independent LLM calls via ThreadPoolExecutor. They do NOT share information with each other.</p>
+<div class="card b1">
+<h3>3 Independent Per-Label Agents in Parallel</h3>
+<p>Each sample is processed by <strong>3 parallel agents</strong> — Tissue, Condition, Treatment. Each agent has its own comprehensive <strong>system prompt</strong> (KV-cached by Ollama) defining its role, expertise, rules, and examples. Only the sample metadata is sent as the user message.</p>
 
 <div class="flow">
-  <div class="flow-step">GSM Metadata</div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border-color:var(--accent)">🤖 Tissue Agent</div>
-  <div class="flow-step" style="border-color:var(--accent)">🤖 Condition Agent</div>
-  <div class="flow-step" style="border-color:var(--accent)">🤖 Treatment Agent</div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step">Merged Labels</div>
+<div class="fs">GSM Metadata</div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--accent)">🤖 Tissue Agent</div>
+<div class="fs" style="border-color:var(--accent)">🤖 Condition Agent</div>
+<div class="fs" style="border-color:var(--accent)">🤖 Treatment Agent</div>
+<div class="fa">→</div>
+<div class="fs">Merged Labels</div>
 </div>
 
-<h4>Prompt Architecture: System (KV-cached) + User (per-sample)</h4>
-<p>Each agent has a comprehensive <strong>system prompt</strong> that defines its role, expertise, rules, and examples. This is sent once and <strong>KV-cached by Ollama</strong> — subsequent calls only process the new metadata tokens (~30-40% latency reduction).</p>
-
+<h4>System Prompt Architecture (KV-Cached)</h4>
 <div class="grid">
 <div>
-<span class="prompt-label sys">SYSTEM PROMPT (cached)</span>
-<div class="prompt-box">You are a biomedical tissue extraction specialist.
-Your sole task is to identify the biological tissue,
-cell type, or cell line from GEO sample metadata.
+<span class="pl" style="background:var(--purple)">SYSTEM PROMPT — sent once, cached</span>
+<div class="prompt">You are a biomedical condition extraction specialist.
+Your sole task is to identify the disease state,
+condition, or phenotype from GEO sample metadata.
 
 YOUR EXPERTISE:
-- All human anatomical tissues and organs
-- Cell types: immune, epithelial, endothelial, stem...
-- Cell lines: HeLa, MCF-7, A549, HL-60, THP-1...
-- Brain subregions: hippocampus, prefrontal cortex...
+- Cancer: carcinoma, adenocarcinoma, sarcoma, lymphoma,
+  leukemia, melanoma, glioma, myeloma
+- Infections: bacterial, viral, parasitic
+- Genetic: cystic fibrosis, Down syndrome, CAIS
+- Phenotypes: obese, diabetic, hypertensive, smoker
+- Normal/Control/Healthy/Unaffected → "Control"
+
+CRITICAL: Scan ALL fields. Disease info hides ANYWHERE.
 
 EXTRACTION RULES:
-1. Most specific term (Alveolar Macrophages not Lung)
-2. Priority: Cell Line > Cell Type > Tissue
-3. Tumor samples → extract TISSUE not disease
-4. Title Case. One answer only.
+1. Most specific condition present
+2. Copy exactly — do NOT rename
+3. Abbreviations valid: CAIS, AML, HCC, T2D
+4. Title Case. One answer. No explanation.
 
 EXAMPLES:
-"source: whole blood" → Whole Blood
-"MCF-7 cell line" → MCF-7
-"prefrontal cortex tissue" → Prefrontal Cortex</div>
+"disease state: HCC" → Hepatocellular Carcinoma
+"infected with N. meningitidis" → N. Meningitidis
+Title: "ARD842, CAIS, F" → CAIS
+"group: control" → Control
+No disease info → Not Specified</div>
 </div>
 <div>
-<span class="prompt-label usr">USER PROMPT (per sample)</span>
-<div class="prompt-box">Title: Cutaneous psoriasis PsC 15
-Source: whole blood
-Characteristics: tissue: whole blood;
-  condition: Cutaneous psoriasis;
-  gender: Female; batch: 1
-Description: Biological replicate 15 of 20.
-Experiment: Psoriasis gene expression in blood
-Summary: Whole blood expression profiling...</div>
-<p style="margin-top:12px"><strong>Agent output:</strong> <code style="color:var(--green)">Whole Blood</code></p>
+<span class="pl" style="background:var(--accent)">USER PROMPT — per sample, only metadata</span>
+<div class="prompt">Title: T123
+Source:
+Characteristics: patient code: 123;
+  gender: Male; age: 74; tumor grade: 3;
+  t-stage: 1; n-stage: 1
+Description: Gene expression data of original
+  tumor tissue of pancreatic ductal
+  adenocarcinoma patient
+Experiment: Gene expression profiling of
+  pancreatic ductal adenocarcinoma
+Summary: Pancreatic ductal adenocarcinoma
+  (PDAC) is the most common pancreatic cancer.</div>
+<p style="margin-top:12px;color:var(--green)"><strong>→ Pancreatic Ductal Adenocarcinoma</strong></p>
+<p style="color:var(--text2);font-size:.85em;margin-top:8px">System prompt KV tensors are cached — only user metadata tokens are processed per call (~30-40% latency reduction)</p>
 </div>
 </div>
 
-<h4>Metadata Fields Passed to Each Agent</h4>
+<h4>Metadata Fields &amp; Character Limits</h4>
 <table>
-<tr><th>Field</th><th>Source</th><th>Max Length</th></tr>
-<tr><td>Title</td><td>gsm.title</td><td>80 chars</td></tr>
-<tr><td>Source</td><td>gsm.source_name_ch1</td><td>80 chars</td></tr>
-<tr><td>Characteristics</td><td>gsm.characteristics_ch1</td><td>300 chars</td></tr>
-<tr><td>Description</td><td>gsm.description</td><td>200 chars</td></tr>
-<tr><td>Experiment</td><td>GSE title (from NCBI API)</td><td>120 chars</td></tr>
-<tr><td>Summary</td><td>GSE summary (from NCBI API)</td><td>250 chars</td></tr>
+<tr><th>Field</th><th>Source</th><th>Phase 1 Limit</th><th>Phase 1c Limit</th></tr>
+<tr><td>Title</td><td>gsm.title</td><td>80 chars</td><td>200 chars</td></tr>
+<tr><td>Source</td><td>gsm.source_name_ch1</td><td>80 chars</td><td>200 chars</td></tr>
+<tr><td>Characteristics</td><td>gsm.characteristics_ch1</td><td>300 chars</td><td>800 chars</td></tr>
+<tr><td>Description</td><td>gsm.description</td><td style="color:var(--red)">200 chars (avg 765)</td><td style="color:var(--green)">2,000 chars</td></tr>
+<tr><td>Experiment</td><td>GSE title (NCBI API)</td><td>120 chars</td><td>full</td></tr>
+<tr><td>Summary</td><td>GSE summary (NCBI API)</td><td style="color:var(--red)">250 chars (avg 803)</td><td style="color:var(--green)">1,000 chars</td></tr>
+<tr><td>Design</td><td>GSE overall_design</td><td>not included</td><td style="color:var(--green)">500 chars</td></tr>
 </table>
 
 <div>
-<span class="metric">Speed: <span class="val">~1.3s/sample</span></span>
-<span class="metric">Workers: <span class="val">20 parallel</span></span>
-<span class="metric">Checkpoint: <span class="val">every 5,000 samples</span></span>
-<span class="metric">Config: <span class="val">think=false, T=0, num_ctx=1024</span></span>
+<span class="m">Speed: <span class="v">~1.3s/sample</span></span>
+<span class="m">Workers: <span class="v">20 parallel</span></span>
+<span class="m">Checkpoint: <span class="v">every 5,000</span></span>
+<span class="m">num_ctx: <span class="v">1024</span></span>
 </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════ -->
-<h2><span class="phase-badge p1b">Phase 1b</span> NS Inference</h2>
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>3. <span class="badge" style="background:var(--purple)">Phase 1b</span> GSE-Context NS Inference</h2>
 
-<div class="card phase1b">
-<h3>Architecture: Per-GSE Inference with KV-Cached Context</h3>
-<p>For fields still "Not Specified" after Phase 1, per-GSE inference agents re-infer labels from the <strong>full experiment context</strong>. Each GSEInferencer owns one experiment and processes all its NS samples sequentially.</p>
+<div class="card b1b">
+<h3>Per-GSE Inference with KV-Cached Experiment Context</h3>
+<p>For fields still "Not Specified", per-GSE inference agents re-infer from the <strong>full experiment context</strong>. The GSE metadata (title, summary, design) is placed in the <strong>system prompt</strong> — Ollama caches the KV tensors, so all NS samples in the same experiment share the cached context.</p>
 
 <div class="flow">
-  <div class="flow-step">NS Sample</div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border-color:var(--purple)">GSE Context<br><small>(KV-cached system prompt)</small></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border-color:var(--purple)">🤖 Per-label Inferencer</div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step">Resolved Label</div>
+<div class="fs">NS Sample</div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--purple)">GSE Context<br><small>system prompt, KV-cached</small></div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--purple)">🤖 Per-label Inferencer</div>
+<div class="fa">→</div>
+<div class="fs">Resolved or NS</div>
 </div>
-
-<h4>KV Cache Strategy</h4>
-<p>The GSE experiment metadata (title, summary, overall design) is placed in the <strong>system prompt</strong>. Ollama caches the KV tensors — so processing 50 NS samples from the same GSE only computes the system prompt ONCE. This gives <strong>~40% latency reduction</strong> vs placing context in the user message.</p>
 
 <div>
-<span class="metric">Speed: <span class="val">~0.5s/sample</span></span>
-<span class="metric">Strategy: <span class="val">GSE context as system prompt</span></span>
-<span class="metric">Impact: <span class="val">Condition resolution 91% → 97%</span></span>
+<span class="m">Speed: <span class="v">~0.5s/sample</span></span>
+<span class="m">KV cache: <span class="v">~40% faster</span></span>
+<span class="m">Impact: <span class="v">Condition 91% → 97%</span></span>
 </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════ -->
-<h2><span class="phase-badge" style="background:var(--red)">Phase 1c</span> Full-Metadata Re-extraction</h2>
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>4. <span class="badge" style="background:var(--red)">Phase 1c</span> Full-Metadata Re-extraction</h2>
 
-<div class="card" style="border-left: 4px solid var(--red);">
-<h3>Architecture: No Truncation — Full Metadata for Hard Cases</h3>
-<p>Samples STILL "Not Specified" after Phase 1 + 1b are re-processed with <strong>NO character limits</strong> on Description (up to 2000 chars) and Summary (up to 1000 chars). This ensures no information loss for the hardest cases where disease/tissue info appears deep in the metadata text.</p>
+<div class="card b1c">
+<h3>No Truncation — Complete Information for Hard Cases</h3>
+<p>Samples STILL "Not Specified" after Phase 1 + 1b are re-processed with <strong>NO character limits</strong>. Phase 1 truncates Description to 200 chars (avg 765, losing 73%) and Summary to 250 chars (avg 803, losing 73%). Phase 1c removes these limits.</p>
+
+<p><strong>Scientific justification:</strong> The pipeline first tries the fast approach (Phase 1), then context-aware inference (Phase 1b). Only for remaining hard cases (~3-5%) does it pay the latency cost of full metadata. The paper can state: <em>"All samples with unresolved labels were re-processed with untruncated metadata to ensure no information loss."</em></p>
 
 <div class="flow">
-  <div class="flow-step" style="border-color:var(--red)">Still-NS Samples<br><small>~3-5% of total</small></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border-color:var(--red)">Full Metadata<br><small>No truncation</small></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border-color:var(--red)">🤖 Per-label Agent<br><small>num_ctx=2048</small></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step">Resolved or still NS</div>
+<div class="fs" style="border-color:var(--red)">Still-NS samples<br><small>~3-5% of total</small></div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--red)">Full metadata<br><small>no char limits</small></div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--red)">🤖 Same agents<br><small>num_ctx=2048</small></div>
+<div class="fa">→</div>
+<div class="fs">Resolved or final NS</div>
 </div>
-
-<h4>Why Phase 1c is Necessary</h4>
-<p>Phase 1 truncates metadata to keep latency low (~1.3s/sample): Description at 200 chars, Summary at 250 chars. But GEO summaries average <strong>803 chars</strong> (73% lost) and descriptions average <strong>765 chars</strong> (81% lost). Disease names and tissue descriptions can appear in the truncated portion.</p>
-
-<h4>Character Limits Comparison</h4>
-<table>
-<tr><th>Field</th><th>Phase 1 Limit</th><th>Phase 1c Limit</th><th>Avg Actual Length</th></tr>
-<tr><td>Title</td><td>80 chars</td><td>200 chars</td><td>~50 chars</td></tr>
-<tr><td>Source</td><td>80 chars</td><td>200 chars</td><td>~30 chars</td></tr>
-<tr><td>Characteristics</td><td>300 chars</td><td>800 chars</td><td>~95 chars</td></tr>
-<tr><td>Description</td><td style="color:var(--red)">200 chars</td><td style="color:var(--green)">2,000 chars</td><td>765 chars</td></tr>
-<tr><td>GSE Summary</td><td style="color:var(--red)">250 chars</td><td style="color:var(--green)">1,000 chars</td><td>803 chars</td></tr>
-<tr><td>GSE Design</td><td>Not included</td><td style="color:var(--green)">500 chars</td><td>~300 chars</td></tr>
-</table>
 
 <div>
-<span class="metric">Speed: <span class="val">~2.5s/sample</span></span>
-<span class="metric">Samples: <span class="val">~3-5% of total (NS only)</span></span>
-<span class="metric">ETA overhead: <span class="val">~6% of total runtime</span></span>
-<span class="metric">Config: <span class="val">num_ctx=2048</span></span>
+<span class="m">Speed: <span class="v">~2.5s/sample</span></span>
+<span class="m">Samples: <span class="v">~3-5% (NS only)</span></span>
+<span class="m">Runtime overhead: <span class="v">~6%</span></span>
 </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════ -->
-<h2><span class="phase-badge p2">Phase 2</span> Retrieval-Augmented Collapse</h2>
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>5. <span class="badge" style="background:var(--orange)">Phase 2</span> Retrieval-Augmented Collapse</h2>
 
-<div class="card phase2">
-<h3>Architecture: Per-GSE Working Memory + Semantic Retrieval + LLM Reasoning</h3>
-<p>Phase 2 normalizes raw extracted labels to canonical cluster names. Each GSE is processed as a unit with <strong>per-GSE working memory</strong> that accumulates resolution decisions.</p>
+<div class="card b2">
+<h3>Per-GSE Working Memory + BioLORD-2023 Retrieval + LLM Reasoning</h3>
+<p>Normalizes raw labels to canonical cluster names. Each GSE is processed as a unit with <strong>per-GSE working memory</strong>. The collapse agent accumulates resolution decisions within each experiment.</p>
 
 <div class="flow">
-  <div class="flow-step">Raw Label</div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border-color:var(--green)">① Working Memory<br><small>&lt;1ms</small></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border-color:var(--accent)">② Episodic Cache<br><small>&lt;1ms</small></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border-color:var(--cyan)">③ BioLORD Retrieval<br><small>~17ms</small></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border-color:var(--orange)">④ LLM Pick<br><small>~700ms</small></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step">Canonical Label</div>
+<div class="fs">Raw Label</div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--green)">① Working Mem<br><small>&lt;1ms</small></div>
+<div class="fa">miss→</div>
+<div class="fs" style="border-color:var(--accent)">② Episodic<br><small>&lt;1ms</small></div>
+<div class="fa">miss→</div>
+<div class="fs" style="border-color:var(--cyan)">③ BioLORD<br><small>~17ms</small></div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--orange)">④ LLM Pick<br><small>~700ms</small></div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--green)">Cache result</div>
 </div>
 
-<h4>Step-by-Step Cascade</h4>
 <table>
 <tr><th>Step</th><th>What</th><th>Speed</th><th>Handles</th></tr>
-<tr><td style="color:var(--green)"><strong>① Working Memory</strong></td><td>Resolution from earlier samples in THIS GSE</td><td>&lt;1ms</td><td>~30% within-GSE repeats</td></tr>
-<tr><td style="color:var(--accent)"><strong>② Episodic Cache</strong></td><td>Resolution from ALL previous GSEs</td><td>&lt;1ms</td><td>~25% cross-GSE repeats</td></tr>
-<tr><td style="color:var(--cyan)"><strong>③ BioLORD-2023</strong></td><td>Embed raw label → cosine sim → top-20 candidates</td><td>~17ms</td><td>Candidate retrieval</td></tr>
-<tr><td style="color:var(--orange)"><strong>④ LLM Pick</strong></td><td>gemma4:e2b picks best canonical cluster from candidates</td><td>~700ms</td><td>~45% first encounters</td></tr>
+<tr><td style="color:var(--green)">① Working Memory</td><td>Resolution from earlier samples in THIS GSE</td><td>&lt;1ms</td><td>~30%</td></tr>
+<tr><td style="color:var(--accent)">② Episodic Cache</td><td>Resolution from ALL previous GSEs</td><td>&lt;1ms</td><td>~25%</td></tr>
+<tr><td style="color:var(--cyan)">③ BioLORD-2023</td><td>Embed → cosine sim → top-20 candidates</td><td>~17ms</td><td>retrieval</td></tr>
+<tr><td style="color:var(--orange)">④ LLM Reasoning</td><td>gemma4:e2b picks best canonical cluster</td><td>~700ms</td><td>~45%</td></tr>
 </table>
 
 <h4>Collapse Agent System Prompt (with Memory)</h4>
-<div class="prompt-box">You are a biomedical label normalizer with memory.
-
-YOUR MEMORY:
-- You remember resolutions from previous samples in this experiment
-- You know the experiment's topic for disambiguation
+<div class="prompt">You are a biomedical label normalizer with memory.
 
 EXPERIMENT CONTEXT:
   Title: {GSE title}
   Summary: {GSE summary}
 
-RECENT RESOLUTIONS:
+RECENT RESOLUTIONS IN THIS EXPERIMENT:
   Tissue: "breast tumor" → Breast
+  Tissue: "normal breast" → Breast
   Condition: "node-negative breast cancer" → Breast Cancer
 
 MATCHING RULES:
-1. PRESERVE SPECIFICITY — Prefrontal Cortex stays, NOT Brain
-2. NORMALIZE NAMING — "HL-60 cell" → Cell Line: Hl-60 Cells
-3. USE CONTEXT — if experiment is about breast cancer, disambiguate accordingly
+1. PRESERVE SPECIFICITY
+   "Prefrontal Cortex" → Prefrontal Cortex (NOT Brain)
+   "HL-60" → Cell Line: Hl-60 Cells (NOT Leukemia)
+2. NORMALIZE NAMING ONLY
+   "Normal Liver" → Liver (strip qualifier)
+   "breast" → Breast (fix case)
+3. USE CONTEXT TO DISAMBIGUATE
+   If experiment is breast cancer → pick breast-related clusters
 4. NEW: only for genuinely novel entities
 
-CANDIDATES (from BioLORD-2023 retrieval):
+CANDIDATES (from BioLORD-2023):
   - Breast (0.82)
-  - Breast Cancer Tissue (0.79)
-  - Cell Type: Breast Cancer Cells (0.76)
-  ...</div>
+  - Cell Type: Breast Cancer Cells (0.79)
+  - Breast Cancer Tissue (0.76)
+  ...
+
+RESPOND WITH ONLY THE CLUSTER NAME.</div>
 
 <div>
-<span class="metric">Speed: <span class="val">~700ms/unique label</span></span>
-<span class="metric">Embedding: <span class="val">BioLORD-2023 (768d, CPU)</span></span>
-<span class="metric">Vocabulary: <span class="val">1,459 Tissue + 2,704 Condition + 3,105 Treatment</span></span>
-<span class="metric">Orphan clusters: <span class="val">0% (validated on 200 samples)</span></span>
+<span class="m">Speed: <span class="v">~700ms/unique</span></span>
+<span class="m">Embedding: <span class="v">BioLORD-2023 (768d, CPU)</span></span>
+<span class="m">Vocabulary: <span class="v">7,268 clusters</span></span>
+<span class="m">Orphan clusters: <span class="v">0%</span></span>
 </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════ -->
-<h2>Memory Architecture</h2>
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>6. Memory Architecture</h2>
 
-<div class="card memory">
-<h3>Hierarchical Memory System</h3>
-
+<div class="card bm">
 <div class="grid">
 <div>
-<h4>🧠 Working Memory (per-GSE)</h4>
-<p>Initialized at GSE start with experiment context. Accumulates resolution decisions as samples are processed. After resolving "breast tumor" → "Breast" for sample #1, samples #2-100 resolve instantly.</p>
-<p><span class="tag tag-memory">Scope: one experiment</span> <span class="tag tag-speed">Speed: &lt;1ms</span></p>
+<h3>🧠 Working Memory <span class="tag tmem">per-GSE</span></h3>
+<p>Initialized at GSE start with experiment context (title, summary). Accumulates resolutions as samples are processed. "breast tumor" → "Breast" resolved for sample #1 → samples #2-100 resolve instantly. Promoted to global episodic when GSE completes.</p>
+<p><span class="m">Scope: <span class="v">one experiment</span></span> <span class="m">Speed: <span class="v">&lt;1ms</span></span></p>
 </div>
 <div>
-<h4>💡 Episodic Cache (global)</h4>
-<p>In-memory dict mapping (column, raw_label) → canonical. Grows across GSEs. Later experiments resolve most labels without LLM calls because tissue/condition labels recur across studies.</p>
-<p><span class="tag tag-memory">Scope: all experiments</span> <span class="tag tag-speed">Speed: &lt;1ms</span></p>
+<h3>💡 Episodic Cache <span class="tag tmem">global</span></h3>
+<p>In-memory dict: (column, raw_label) → canonical_name. Grows across GSEs. Later experiments resolve most labels without LLM calls because tissue/condition labels recur across studies. Also caches normalized variants (lowercase, no-hyphen, title-case).</p>
+<p><span class="m">Scope: <span class="v">all experiments</span></span> <span class="m">Speed: <span class="v">&lt;1ms</span></span></p>
 </div>
 <div>
-<h4>🔮 Semantic Retrieval (BioLORD-2023)</h4>
-<p>768-dimensional biomedical embeddings for all canonical clusters. BioLORD-2023 trained on UMLS knowledge graphs — understands "dermal" → "Skin" (0.86 sim) where general models fail (0.55).</p>
-<p><span class="tag tag-memory">Scope: vocabulary DB</span> <span class="tag tag-speed">Speed: ~17ms</span></p>
+<h3>🔮 Semantic Retrieval <span class="tag tmem">BioLORD-2023</span></h3>
+<p>768-dim biomedical embeddings for all canonical clusters. Trained on UMLS knowledge graphs — understands biomedical relationships that general models miss. "dermal" → "Skin" at 0.86 (vs 0.55 with MiniLM).</p>
+<p><span class="m">Scope: <span class="v">vocabulary DB</span></span> <span class="m">Speed: <span class="v">~17ms</span></span></p>
 </div>
 <div>
-<h4>🗄️ Persistent Knowledge Store</h4>
-<p>biomedical_memory.db (SQLite): canonical clusters, cluster-to-variant mappings, knowledge graph triples (17,396 synonym relationships), episodic resolution logs across runs.</p>
-<p><span class="tag tag-memory">Scope: persistent</span> <span class="tag tag-speed">Speed: ~1ms</span></p>
+<h3>🗄️ Persistent Store <span class="tag tmem">SQLite</span></h3>
+<p>biomedical_memory.db: 1,459 Tissue + 2,704 Condition + 3,105 Treatment canonical clusters. 17,396 knowledge graph triples (synonym relationships). Episodic resolution logs across runs. Curated from biomedical ontology sources.</p>
+<p><span class="m">Scope: <span class="v">persistent</span></span> <span class="m">Speed: <span class="v">~1ms</span></span></p>
 </div>
 </div>
 
-<h4>Memory Check Order (Phase 2 Collapse)</h4>
+<h4>Memory Flow During Phase 2</h4>
 <div class="flow">
-  <div class="flow-step" style="border-color:var(--green)">Working Memory<br><small>This GSE, &lt;1ms</small></div>
-  <div class="flow-arrow">miss →</div>
-  <div class="flow-step" style="border-color:var(--accent)">Episodic Cache<br><small>All GSEs, &lt;1ms</small></div>
-  <div class="flow-arrow">miss →</div>
-  <div class="flow-step" style="border-color:var(--cyan)">BioLORD Retrieval<br><small>Top-20, ~17ms</small></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border-color:var(--orange)">LLM Reasoning<br><small>~700ms</small></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-step" style="border-color:var(--green)">Cache Result<br><small>Working + Episodic</small></div>
+<div class="fs" style="border-color:var(--green)">Working Memory<br><small>this GSE</small></div>
+<div class="fa">miss→</div>
+<div class="fs" style="border-color:var(--accent)">Episodic Cache<br><small>all GSEs</small></div>
+<div class="fa">miss→</div>
+<div class="fs" style="border-color:var(--cyan)">BioLORD Retrieval<br><small>top-20 candidates</small></div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--orange)">LLM Reasoning<br><small>pick + context</small></div>
+<div class="fa">→</div>
+<div class="fs" style="border-color:var(--green)">Cache in both<br><small>working + episodic</small></div>
 </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════ -->
-<h2>Agent Definitions</h2>
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>7. Agent Definitions</h2>
 
-<div class="card agent">
-<h3>Tissue Extraction Agent</h3>
-<p><span class="tag tag-model">gemma4:e2b</span> <span class="tag tag-speed">~1.3s/sample</span></p>
-<p><strong>Role:</strong> Identify biological tissue, cell type, or cell line from GEO metadata.</p>
+<div class="card ba">
+<h3>🤖 Tissue Extraction Agent</h3>
+<p><span class="tag tm">gemma4:e2b</span> <span class="tag ts">~1.3s/sample</span></p>
+<p><strong>Role:</strong> Identify biological tissue, cell type, or cell line.</p>
 <p><strong>Expertise:</strong> Anatomical tissues, cell types (immune, epithelial, stem), cell lines (HeLa, MCF-7, A549, HL-60), brain subregions.</p>
-<p><strong>Key rule:</strong> For tumor samples, extract the TISSUE not the disease ("breast tumor" → Breast).</p>
-<p><strong>Priority:</strong> Cell Line &gt; Cell Type &gt; Tissue/Organ</p>
+<p><strong>Key rules:</strong> Priority: Cell Line > Cell Type > Tissue. For tumor samples extract TISSUE not disease ("breast tumor" → Breast). Scan ALL metadata fields.</p>
 </div>
 
-<div class="card agent">
-<h3>Condition Extraction Agent</h3>
-<p><span class="tag tag-model">gemma4:e2b</span> <span class="tag tag-speed">~1.3s/sample</span></p>
+<div class="card ba">
+<h3>🤖 Condition Extraction Agent</h3>
+<p><span class="tag tm">gemma4:e2b</span> <span class="tag ts">~1.3s/sample</span></p>
 <p><strong>Role:</strong> Identify disease state, condition, or phenotype.</p>
-<p><strong>Expertise:</strong> Cancers, infections, genetic conditions, syndromes, phenotypes. Recognizes abbreviations (CAIS, AML, HCC). Understands that Normal/Control/Healthy are equivalent.</p>
-<p><strong>Key rule:</strong> Scan ALL metadata fields — disease info hides in Description, not just Characteristics.</p>
+<p><strong>Expertise:</strong> Cancers, infections, genetic conditions, syndromes, phenotypes. Recognizes abbreviations (CAIS, AML, HCC). Normal/Control/Healthy → "Control".</p>
+<p><strong>Key rules:</strong> Scan ALL fields — disease info hides in Description, not just Characteristics. Mutations imply disease (CFTR D508 = cystic fibrosis).</p>
 </div>
 
-<div class="card agent">
-<h3>Treatment Extraction Agent</h3>
-<p><span class="tag tag-model">gemma4:e2b</span> <span class="tag tag-speed">~1.3s/sample</span></p>
-<p><strong>Role:</strong> Identify drugs, compounds, interventions, or exposures.</p>
-<p><strong>Expertise:</strong> Pharmaceuticals, biological agents, gene knockdowns, physical treatments. Distinguishes treatments from lab protocols (Illumina, TRIzol are NOT treatments).</p>
-<p><strong>Key rule:</strong> Vehicle controls (DMSO, PBS) → "Untreated". Diseases are NOT treatments.</p>
+<div class="card ba">
+<h3>🤖 Treatment Extraction Agent</h3>
+<p><span class="tag tm">gemma4:e2b</span> <span class="tag ts">~1.3s/sample</span></p>
+<p><strong>Role:</strong> Identify drugs, compounds, interventions, exposures.</p>
+<p><strong>Expertise:</strong> Pharmaceuticals, biological agents, gene knockdowns, physical treatments. Distinguishes treatments from lab protocols and diseases.</p>
+<p><strong>Key rules:</strong> Vehicle controls (DMSO, PBS) → "Untreated". Diseases are NOT treatments. Lab protocols (Illumina, TRIzol) are NOT treatments.</p>
 </div>
 
-<div class="card agent">
-<h3>Collapse Agent (Phase 2)</h3>
-<p><span class="tag tag-model">gemma4:e2b</span> <span class="tag tag-model">BioLORD-2023</span> <span class="tag tag-speed">~700ms/unique label</span></p>
+<div class="card ba">
+<h3>🤖 Collapse Agent (Phase 2)</h3>
+<p><span class="tag tm">gemma4:e2b</span> <span class="tag tm">BioLORD-2023</span> <span class="tag ts">~700ms/unique</span> <span class="tag tmem">memory-enabled</span></p>
 <p><strong>Role:</strong> Normalize raw labels to canonical cluster names using retrieval + reasoning.</p>
-<p><strong>Memory:</strong> Per-GSE working memory + global episodic cache. Knows experiment context.</p>
-<p><strong>Key rule:</strong> Preserve specificity — "Cerebellum" stays "Cerebellum", NOT collapsed to "Brain".</p>
+<p><strong>Memory:</strong> Per-GSE working memory + global episodic cache. Sees experiment context + recent resolutions.</p>
+<p><strong>Key rules:</strong> PRESERVE specificity (Cerebellum ≠ Brain). Only normalize naming. Use experiment context to disambiguate.</p>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════ -->
-<h2>Performance &amp; Benchmarks</h2>
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>8. Performance</h2>
 
 <div class="card">
 <h3>CREEDS Benchmark (LLM Judge, 1000 samples/phase)</h3>
 <table>
-<tr><th>Phase</th><th>Tissue P</th><th>Tissue R</th><th>Tissue F1</th><th>Condition P</th><th>Condition R</th><th>Condition F1</th></tr>
-<tr><td><span class="phase-badge p1">Phase 1</span></td><td>0.937</td><td>0.997</td><td><strong>0.966</strong></td><td>0.856</td><td>0.954</td><td><strong>0.902</strong></td></tr>
-<tr><td><span class="phase-badge p2">Phase 2</span></td><td>0.950</td><td>0.997</td><td><strong>0.973</strong></td><td>0.835</td><td>0.952</td><td><strong>0.890</strong></td></tr>
+<tr><th>Phase</th><th>Tissue P</th><th>Tissue R</th><th>Tissue F1</th><th>Cond P</th><th>Cond R</th><th>Cond F1</th></tr>
+<tr><td><span class="badge" style="background:var(--accent)">P1</span>+<span class="badge" style="background:var(--purple)">P1b</span></td><td>0.937</td><td>0.997</td><td><strong>0.966</strong></td><td>0.856</td><td>0.954</td><td><strong>0.902</strong></td></tr>
+<tr><td><span class="badge" style="background:var(--orange)">P2</span> Collapse</td><td>0.950</td><td>0.997</td><td><strong>0.973</strong></td><td>0.835</td><td>0.952</td><td><strong>0.890</strong></td></tr>
 </table>
 
-<h3>Throughput</h3>
+<h3>Throughput (GTX 1080 Ti, 11GB VRAM, 20 workers)</h3>
 <table>
 <tr><th>Phase</th><th>Per-Sample</th><th>GPL570 (111K)</th><th>GPL96 (30K)</th></tr>
-<tr><td>Phase 1 (Extract)</td><td>~1.3s</td><td>~40 hours</td><td>~11 hours</td></tr>
-<tr><td>Phase 1b (Infer)</td><td>~0.5s</td><td>~15 hours</td><td>~4 hours</td></tr>
-<tr><td>Phase 2 (Collapse)</td><td>~21ms avg*</td><td>~56 min</td><td>~15 min</td></tr>
+<tr><td>Phase 1 (Extract)</td><td>~1.3s</td><td>~40h</td><td>~11h</td></tr>
+<tr><td>Phase 1b (Infer)</td><td>~0.5s</td><td>~15h</td><td>~4h</td></tr>
+<tr><td>Phase 1c (Full)</td><td>~2.5s</td><td>~3.5h (5% only)</td><td>~1h</td></tr>
+<tr><td>Phase 2 (Collapse)</td><td>~21ms avg*</td><td>~56min</td><td>~15min</td></tr>
 </table>
-<p style="color:var(--text2);font-size:0.85em">*Phase 2 avg includes episodic cache hits (&lt;1ms, ~55%) and LLM calls (~700ms, ~45%). Large platforms have more repeats → lower avg.</p>
+<p style="color:var(--text2);font-size:.83em">*Phase 2 avg includes episodic hits (&lt;1ms, ~55%) and LLM calls (~700ms, ~45%).</p>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════ -->
-<h2>Output Files</h2>
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>9. Output Files</h2>
 
 <div class="card">
 <table>
 <tr><th>File</th><th>Phase</th><th>Content</th></tr>
-<tr><td><code>labels_raw.csv</code></td><td>Phase 1</td><td>Raw extraction labels (before NS inference)</td></tr>
-<tr><td><code>labels_phase1b.csv</code></td><td>Phase 1b</td><td>Labels after NS inference (before collapse)</td></tr>
+<tr><td><code>labels_raw.csv</code></td><td>Phase 1</td><td>Raw extraction (before NS inference)</td></tr>
+<tr><td><code>labels_phase1b_1c.csv</code></td><td>Phase 1b+1c</td><td>After NS inference + full re-extraction</td></tr>
 <tr><td><code>labels_final.csv</code></td><td>Phase 2</td><td>Final normalized labels (canonical clusters)</td></tr>
-<tr><td><code>full_repaired.csv</code></td><td>All</td><td>Complete platform with labels merged back</td></tr>
+<tr><td><code>full_repaired.csv</code></td><td>All</td><td>Complete platform with labels merged</td></tr>
 <tr><td><code>NS_repaired.csv</code></td><td>All</td><td>Audit trail: before/after per sample</td></tr>
 <tr><td><code>checkpoints/</code></td><td>All</td><td>Phase 1 JSON + Phase 2 CSV checkpoints</td></tr>
 </table>
 </div>
 
-<p style="text-align:center;color:var(--text2);margin-top:40px;font-size:0.85em">
-TAILS v2.1 — <a href="https://github.com/SciSpectator/LLM-Label-Extractor" style="color:var(--accent)">github.com/SciSpectator/LLM-Label-Extractor</a> — MIT License — Fully local via Ollama
+<p style="text-align:center;color:var(--text2);margin-top:50px;font-size:.85em">
+TAILS v2.1 — <a href="https://github.com/SciSpectator/LLM-Label-Extractor" style="color:var(--accent)">github.com/SciSpectator/LLM-Label-Extractor</a> — MIT License — Fully local via Ollama — No API keys
 </p>
 
 </div>
