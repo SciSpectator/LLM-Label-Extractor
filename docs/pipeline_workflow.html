@@ -142,13 +142,14 @@ Summary: Pancreatic ductal adenocarcinoma
 <h4>Metadata Fields &amp; Character Limits</h4>
 <table>
 <tr><th>Field</th><th>Source</th><th>Phase 1 Limit</th><th>Phase 1c Limit</th></tr>
-<tr><td>Title</td><td>gsm.title</td><td>80 chars</td><td>200 chars</td></tr>
-<tr><td>Source</td><td>gsm.source_name_ch1</td><td>80 chars</td><td>200 chars</td></tr>
-<tr><td>Characteristics</td><td>gsm.characteristics_ch1</td><td>300 chars</td><td>800 chars</td></tr>
-<tr><td>Description</td><td>gsm.description</td><td style="color:var(--red)">200 chars (avg 765)</td><td style="color:var(--green)">2,000 chars</td></tr>
-<tr><td>Experiment</td><td>GSE title (NCBI API)</td><td>120 chars</td><td>full</td></tr>
-<tr><td>Summary</td><td>GSE summary (NCBI API)</td><td style="color:var(--red)">250 chars (avg 803)</td><td style="color:var(--green)">1,000 chars</td></tr>
-<tr><td>Design</td><td>GSE overall_design</td><td>not included</td><td style="color:var(--green)">500 chars</td></tr>
+<tr><td>Title</td><td>gsm.title</td><td>80 chars</td><td style="color:var(--green)"><strong>NO LIMIT</strong></td></tr>
+<tr><td>Source</td><td>gsm.source_name_ch1</td><td>80 chars</td><td style="color:var(--green)"><strong>NO LIMIT</strong></td></tr>
+<tr><td>Characteristics</td><td>gsm.characteristics_ch1</td><td>300 chars</td><td style="color:var(--green)"><strong>NO LIMIT</strong></td></tr>
+<tr><td>Description</td><td>gsm.description</td><td style="color:var(--red)">200 chars (avg 765)</td><td style="color:var(--green)"><strong>NO LIMIT</strong></td></tr>
+<tr><td>Treatment Protocol</td><td>gsm.treatment_protocol</td><td>not included</td><td style="color:var(--green)"><strong>INCLUDED</strong></td></tr>
+<tr><td>Experiment</td><td>GSE title (NCBI API)</td><td>120 chars</td><td style="color:var(--green)"><strong>NO LIMIT</strong></td></tr>
+<tr><td>Summary</td><td>GSE summary (NCBI API)</td><td style="color:var(--red)">250 chars (avg 803)</td><td style="color:var(--green)"><strong>NO LIMIT</strong></td></tr>
+<tr><td>Design</td><td>GSE overall_design</td><td>not included</td><td style="color:var(--green)"><strong>NO LIMIT</strong></td></tr>
 </table>
 
 <div>
@@ -187,8 +188,8 @@ Summary: Pancreatic ductal adenocarcinoma
 <h2>4. <span class="badge" style="background:var(--red)">Phase 1c</span> Full-Metadata Re-extraction</h2>
 
 <div class="card b1c">
-<h3>No Truncation — Complete Information for Hard Cases</h3>
-<p>Samples STILL "Not Specified" after Phase 1 + 1b are re-processed with <strong>NO character limits</strong>. Phase 1 truncates Description to 200 chars (avg 765, losing 73%) and Summary to 250 chars (avg 803, losing 73%). Phase 1c removes these limits.</p>
+<h3>ZERO Truncation — Complete Information for Hard Cases</h3>
+<p>Samples STILL "Not Specified" after Phase 1 + 1b are re-processed with <strong>ZERO character limits on ALL fields</strong>. Phase 1 truncates Description to 200 chars (avg 765, losing 73%) and Summary to 250 chars (avg 803, losing 73%). Phase 1c sends the COMPLETE metadata including treatment_protocol and overall_design fields not available in Phase 1. Context window expanded to num_ctx=4096.</p>
 
 <p><strong>Scientific justification:</strong> The pipeline first tries the fast approach (Phase 1), then context-aware inference (Phase 1b). Only for remaining hard cases (~3-5%) does it pay the latency cost of full metadata. The paper can state: <em>"All samples with unresolved labels were re-processed with untruncated metadata to ensure no information loss."</em></p>
 

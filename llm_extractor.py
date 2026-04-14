@@ -6145,11 +6145,12 @@ def pipeline(config: dict, q: queue.Queue):
                         gse_, GSEContext(gse_), model, ollama_url,
                         watchdog, mem_agent=mem_agent, platform=platform_id)
 
-                    # Full metadata — NO truncation limits
+                    # Full metadata — ZERO truncation, complete information
                     _title = str(raw_.get("gsm_title", "")).strip()
                     _source = str(raw_.get("source_name", "")).strip()
                     _char = str(raw_.get("characteristics", "")).replace("\t", " ").strip()
                     _desc = str(raw_.get("description", "")).replace("\t", " ").strip()
+                    _treat_proto = str(raw_.get("treatment_protocol", "")).replace("\t", " ").strip()
                     _gse_info = gse_meta.get(gse_, {})
                     _gse_ctx = ""
                     if _gse_info.get("title"):
@@ -6157,26 +6158,40 @@ def pipeline(config: dict, q: queue.Queue):
                     if _gse_info.get("summary"):
                         _gse_ctx += f"Summary: {_gse_info['summary']}\n"
                     if _gse_info.get("overall_design"):
-                        _gse_ctx += f"Design: {_gse_info['overall_design'][:500]}\n"
+                        _gse_ctx += f"Design: {_gse_info['overall_design']}\n"
 
                     # Only re-extract NS columns
                     ns_cols_ = [c for c in _cols if is_ns(labs_.get(c, NS))]
                     for col_ in ns_cols_:
                         sys_prompt_ = _PER_LABEL_SYSTEM_PROMPTS[col_]
                         user_ = (_EXTRACT_USER_TEMPLATE
-                            .replace("{TITLE}", _title[:200])
-                            .replace("{SOURCE}", _source[:200])
-                            .replace("{CHAR}", _char[:800]))
+                            .replace("{TITLE}", _title)
+                            .replace("{SOURCE}", _source)
+                            .replace("{CHAR}", _char))
                         if _desc:
-                            user_ += f"\nDescription: {_desc[:2000]}"
+                            user_ += f"\nDescription: {_desc}"
+                        if _treat_proto:
+                            user_ += f"\nTreatment Protocol: {_treat_proto}"
                         if _gse_ctx:
-                            user_ += f"\n{_gse_ctx[:1000]}"
+                            user_ += f"\n{_gse_ctx}"
 
+                        # Phase 1c uses larger context window for full metadata
                         text_ = ""
                         for _attempt in range(3):
-                            text_ = worker_._llm_with_model(
-                                user_, model=EXTRACTION_MODEL,
-                                max_tokens=60, system=sys_prompt_)
+                            try:
+                                messages = [{"role": "system", "content": sys_prompt_},
+                                            {"role": "user", "content": user_}]
+                                resp = requests.post(
+                                    ollama_url.rstrip("/") + "/api/chat",
+                                    json={"model": EXTRACTION_MODEL, "messages": messages,
+                                          "options": {"temperature": 0.0, "num_predict": 60,
+                                                      "num_ctx": 4096},
+                                          "think": False, "stream": False, "keep_alive": -1},
+                                    timeout=60)
+                                if resp.status_code == 200:
+                                    text_ = resp.json().get("message", {}).get("content", "").strip()
+                            except Exception:
+                                pass
                             if text_:
                                 break
                             time.sleep(2)
