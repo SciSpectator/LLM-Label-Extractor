@@ -37,7 +37,7 @@
 | :microscope: | **3-Phase Pipeline** | Extract, Infer, Collapse -- progressively refined label assignment |
 | :zap: | **Per-Label Agents** | 3 independent LLM agents (Tissue, Condition, Treatment) run in parallel per sample |
 | :desktop_computer: | **Dark-Theme GUI** | Modern tkinter interface with per-phase progress bars and live resource monitoring |
-| :keyboard: | **Headless CLI Mode** | `run_batch_terminal.py` for servers, HPC, and batch processing |
+| :keyboard: | **HPC / CLI Mode** | `run_cluster.py` for servers, SLURM clusters, and batch processing |
 | :dna: | **Multi-Species Support** | Homo sapiens, Mus musculus, Rattus norvegicus, and 8 more organisms |
 | :lock: | **Fully Local** | All inference runs on your hardware via Ollama -- zero data exfiltration |
 
@@ -259,54 +259,62 @@ python run_gui.py
 4. Select **LLM Model** -- `gemma4:e2b` is the default; choose `gemma2:2b` for low-VRAM setups
 5. Click **Start** -- the pipeline will discover platforms, then process each through all three phases
 
-### CLI / Terminal Batch Mode (Servers & HPC)
+### CLI / HPC Batch Mode (`run_cluster.py`)
 
-The terminal mode is designed for headless servers, HPC clusters, and SSH sessions where no display is available.
+The CLI runner is designed for headless servers, HPC/SLURM clusters, and SSH sessions. All configuration is via environment variables.
 
 ```bash
-# Activate your virtual environment first
-source venv/bin/activate
+# Basic usage (all phases, all platforms)
+python run_cluster.py
 
-# Run the pipeline
-python run_batch_terminal.py
+# Specific platforms only
+PLATFORM_ONLY=GPL570,GPL96 python run_cluster.py
+
+# Select phases to run
+PHASES=1,1b,1c    python run_cluster.py   # extract only, no collapse
+PHASES=1           python run_cluster.py   # Phase 1 only
+PHASES=2           python run_cluster.py   # collapse only (needs checkpoint)
+PHASES=1,1b,1c,2   python run_cluster.py   # all phases (default)
+
+# HPC with fake_ollama_lb (llama_cpp backend)
+USE_FAKE_OLLAMA=1 OLLAMA_URL=http://localhost:8080 python run_cluster.py
+
+# Platform range for parallel SLURM jobs
+PLATFORM_START=0 PLATFORM_END=100 python run_cluster.py     # job 1
+PLATFORM_START=100 PLATFORM_END=200 python run_cluster.py   # job 2
+
+# Override worker count
+NUM_WORKERS=8 python run_cluster.py
 ```
 
-Edit the configuration block at the top of `run_batch_terminal.py` to set:
+**Environment variables:**
 
-```python
-SPECIES          = "Homo sapiens"          # any organism in GEOmetadb
-TECH_MODE        = "Expression Microarray" # or "All (any technology)", "RNA-seq / Sequencing", etc.
-MIN_SAMPLES      = 5                       # minimum samples per platform
-MODEL            = "gemma4:e2b"            # or "gemma2:2b" for low-VRAM
-EXTRACTION_MODEL = "gemma4:e2b"            # model for per-label extraction agents
+| Variable | Default | Description |
+|---|---|---|
+| `PHASES` | `1,1b,1c,2` | Comma-separated phases to run |
+| `PLATFORM_ONLY` | (all) | Comma-separated GPL IDs |
+| `PLATFORM_START` | 0 | Start index for platform range |
+| `PLATFORM_END` | 99999 | End index for platform range |
+| `SKIP_GPLS` | (none) | Comma-separated GPL IDs to skip |
+| `NUM_WORKERS` | auto | Override worker count |
+| `USE_FAKE_OLLAMA` | 0 | Set to 1 for fake_ollama_lb backend |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
+| `HARMONIZED_DIR` | `./NEW_RESULTS` | Output directory |
+| `GEODB_PATH` | `./GEOmetadb.sqlite` | Path to GEOmetadb |
+
+The runner auto-discovers all GPL platforms, skips already-completed ones, and resumes from checkpoints.
+
+### Selecting Specific Platforms
+
+```bash
+# Single platform
+PLATFORM_ONLY=GPL570 python run_cluster.py
+
+# Multiple platforms
+PLATFORM_ONLY=GPL570,GPL96,GPL6244 python run_cluster.py
 ```
 
-The batch runner auto-discovers all GPL platforms matching your species and technology filters, then processes them one by one. Each platform's results are saved independently, so the run is fully resumable -- completed platforms are skipped on restart.
-
-### Headless Mode (run_headless.py) -- Custom GSM Lists
-
-Use `run_headless.py` to annotate a custom list of GSM sample IDs (from any platform):
-
-```python
-config = {
-    "db_path":          "GEOmetadb.sqlite",
-    "platform":         "CUSTOM",
-    "model":            "gemma4:e2b",
-    "extraction_model": "gemma4:e2b",
-    "ollama_url":       "http://localhost:11434",
-    "harmonized_dir":   ".",                # output directory
-    "limit":            None,               # or set an integer to limit samples
-    "num_workers":      20,                 # concurrent GSE workers
-    "skip_install":     False,
-    "gsm_list_file":    "path/to/gsm_list.csv",  # CSV with a "gsm" column
-}
-```
-
-The GSM list CSV should have a `gsm` column with NCBI GEO sample accessions (e.g., `GSM991986`). Samples can span any number of platforms and experiments.
-
-### Selecting a Specific GPL Platform
-
-To process only specific GPL platforms without the GUI, create a short script:
+Or from Python:
 
 ```python
 import llm_extractor as G
@@ -345,7 +353,7 @@ The default model is `gemma4:e2b` (requires 7.2 GB VRAM). To use `gemma2:2b` (2 
 
 **GUI:** Select `gemma2:2b` from the Model dropdown.
 
-**CLI:** Edit the top of `run_batch_terminal.py`:
+**CLI:** Edit the top of `run_cluster.py`:
 ```python
 MODEL            = "gemma2:2b"
 EXTRACTION_MODEL = "gemma2:2b"
@@ -388,7 +396,7 @@ sleep 5
 ollama pull gemma2:2b         # or: ollama pull gemma4:e2b
 
 # Run the pipeline
-python run_batch_terminal.py
+python run_cluster.py
 ```
 
 #### Long-Running Sessions
@@ -401,7 +409,7 @@ tmux new -s llm-extract
 
 # Inside tmux: activate venv and run
 source venv/bin/activate
-python run_batch_terminal.py
+python run_cluster.py
 
 # Detach: Ctrl+B then D
 # Reattach later: tmux attach -t llm-extract
@@ -559,7 +567,7 @@ The pipeline supports **all platform technologies catalogued in GEOmetadb**. Com
 
 ## Configuration
 
-Key configuration is set at runtime in the GUI or at the top of `run_batch_terminal.py`:
+Key configuration is set at runtime in the GUI or at the top of `run_cluster.py`:
 
 | Parameter | Default | Description |
 |---|---|---|
