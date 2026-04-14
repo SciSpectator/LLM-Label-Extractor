@@ -6016,9 +6016,12 @@ def pipeline(config: dict, q: queue.Queue):
             #  Phase 1b: NS inference via GSEInferencer (KV cache reuse)
             # GSE context sent as SYSTEM prompt → Ollama caches KV tensors
             # → ~40% latency reduction vs old approach (context in user msg)
+            _skip_p1b = config.get("skip_phase1b", False)
             _ns_after_p1 = [(gsm_, labs_) for gsm_, labs_ in phase1_extracted.items()
                             if any(is_ns(labs_.get(c, NS)) for c in _cols)]
-            if _ns_after_p1:
+            if _skip_p1b:
+                log(f"\n⏭️  Phase 1b skipped (skip_phase1b=True) — {len(_ns_after_p1):,} NS samples unchanged")
+            elif _ns_after_p1:
                 log(f"\n🔍 Phase 1b: GSEInferencer — NS inference from GSE context "
                     f"({len(_ns_after_p1):,} samples with NS fields) …")
                 log(f"  GSE context as SYSTEM prompt → Ollama KV cache reuse")
@@ -6115,9 +6118,13 @@ def pipeline(config: dict, q: queue.Queue):
             #  Phase 1c: Full-metadata re-extraction for remaining NS fields
             # Samples STILL NS after Phase 1+1b are re-processed with NO char limits
             # on Description and Summary — ensures no information loss.
+            _skip_p1c = config.get("skip_phase1c", False)
             _ns_after_all = [(gsm_, labs_) for gsm_, labs_ in phase1_extracted.items()
                              if any(is_ns(labs_.get(c, NS)) for c in _cols)]
-            if _ns_after_all:
+            if _skip_p1c:
+                if _ns_after_all:
+                    log(f"\n⏭️  Phase 1c skipped (skip_phase1c=True) — {len(_ns_after_all):,} NS samples unchanged")
+            elif _ns_after_all:
                 log(f"\n🔬 Phase 1c: Full-metadata re-extraction for {len(_ns_after_all):,} "
                     f"samples still with NS fields …")
                 log(f"  No character limits on Description/Summary — full metadata scan")
@@ -7289,12 +7296,33 @@ class App(tk.Tk):
                        activebackground=BG2
                        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
-        # Row 3  skip Phase 2 (extract only)
-        self._var_skip_phase2 = tk.BooleanVar(value=False)
-        tk.Checkbutton(g4, text="Skip Phase 2 collapse (extract Phase 1+1b only)",
-                       variable=self._var_skip_phase2, bg=BG2, fg=FG, selectcolor=ACCENT,
+        # Row 3-6  Phase selection
+        tk.Label(g4, text="Phases to run:", bg=BG2, fg=ACCENT2,
+                 font=("", 9, "bold")).grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 2))
+
+        self._var_phase1 = tk.BooleanVar(value=True)
+        tk.Checkbutton(g4, text="Phase 1: Raw extraction (per-label agents)",
+                       variable=self._var_phase1, bg=BG2, fg=FG, selectcolor=ACCENT,
                        activebackground=BG2
-                       ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 0))
+                       ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(0, 0))
+
+        self._var_phase1b = tk.BooleanVar(value=True)
+        tk.Checkbutton(g4, text="Phase 1b: NS inference (GSE context)",
+                       variable=self._var_phase1b, bg=BG2, fg=FG, selectcolor=ACCENT,
+                       activebackground=BG2
+                       ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(0, 0))
+
+        self._var_phase1c = tk.BooleanVar(value=True)
+        tk.Checkbutton(g4, text="Phase 1c: Full re-extraction (no char limits)",
+                       variable=self._var_phase1c, bg=BG2, fg=FG, selectcolor=ACCENT,
+                       activebackground=BG2
+                       ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(0, 0))
+
+        self._var_phase2 = tk.BooleanVar(value=True)
+        tk.Checkbutton(g4, text="Phase 2: Collapse (retrieval + LLM normalization)",
+                       variable=self._var_phase2, bg=BG2, fg=FG, selectcolor=ACCENT,
+                       activebackground=BG2
+                       ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(0, 0))
 
         #  Model & Ollama card 
         c3 = card(left, "Model & Ollama")
@@ -8464,7 +8492,10 @@ class App(tk.Tk):
                 "limit":            limit,
                 "num_workers":      workers,
                 "skip_install":     self._var_skip.get(),
-                "skip_phase2":      self._var_skip_phase2.get(),
+                "skip_phase1":      not self._var_phase1.get(),
+                "skip_phase1b":     not self._var_phase1b.get(),
+                "skip_phase1c":     not self._var_phase1c.get(),
+                "skip_phase2":      not self._var_phase2.get(),
                 "gsm_list_file":    "",
             }
             self._thread = threading.Thread(

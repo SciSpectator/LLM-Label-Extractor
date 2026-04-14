@@ -13,7 +13,10 @@ Environment variables:
   PLATFORM_START   - start index into sorted platform list (default: 0)
   PLATFORM_END     - end index into sorted platform list (default: 99999)
   SKIP_GPLS        - comma-separated GPL IDs to skip
-  SKIP_PHASE2      - "1" to skip Phase 2 collapse (default: 1 = skip)
+  PHASES           - which phases to run (default: "1,1b,1c,2" = all)
+                     Examples: "1" (extract only), "1,1b" (no collapse),
+                     "1,1b,1c" (extract+infer+full, no collapse),
+                     "2" (collapse only, requires existing Phase 1 checkpoint)
   HARMONIZED_DIR   - output directory (default: ./NEW_RESULTS)
   GEODB_PATH       - path to GEOmetadb.sqlite (default: ./GEOmetadb.sqlite)
   USE_FAKE_OLLAMA  - "1" to skip ollama startup (use pre-started fake_ollama_lb)
@@ -69,7 +72,15 @@ PLATFORM_ONLY   = set(os.environ.get("PLATFORM_ONLY", "").split(",")) - {""}
 PLATFORM_START  = int(os.environ.get("PLATFORM_START", 0))
 PLATFORM_END    = int(os.environ.get("PLATFORM_END", 99999))
 SKIP_GPLS       = set(os.environ.get("SKIP_GPLS", "").split(",")) - {""}
-SKIP_PHASE2     = os.environ.get("SKIP_PHASE2", "1") == "1"
+# Phase selection: comma-separated list of phases to run
+# "1,1b,1c,2" = all (default), "1" = extract only, "2" = collapse only, etc.
+_PHASES_STR     = os.environ.get("PHASES", "1,1b,1c,2")
+ENABLED_PHASES  = set(p.strip() for p in _PHASES_STR.split(","))
+SKIP_PHASE2     = "2" not in ENABLED_PHASES
+SKIP_PHASE1B    = "1b" not in ENABLED_PHASES
+SKIP_PHASE1C    = "1c" not in ENABLED_PHASES
+SKIP_PHASE1     = "1" not in ENABLED_PHASES
+
 USE_FAKE_OLLAMA = os.environ.get("USE_FAKE_OLLAMA", "0") == "1"
 NUM_WORKERS     = int(os.environ.get("NUM_WORKERS", 0)) or None  # None = auto-detect
 
@@ -167,7 +178,7 @@ def main():
         print(f"  SKIP_GPLS: {SKIP_GPLS}")
     if NUM_WORKERS:
         print(f"  NUM_WORKERS: {NUM_WORKERS} (override)")
-    print(f"  SKIP_PHASE2={SKIP_PHASE2}  USE_FAKE_OLLAMA={USE_FAKE_OLLAMA}")
+    print(f"  PHASES={_PHASES_STR}  USE_FAKE_OLLAMA={USE_FAKE_OLLAMA}")
     print(f"{'='*60}\n", flush=True)
 
     os.makedirs(HARMONIZED, exist_ok=True)
@@ -290,6 +301,9 @@ def main():
             "limit":          None,
             "num_workers":    NUM_WORKERS,
             "skip_install":   True,
+            "skip_phase1":    SKIP_PHASE1,
+            "skip_phase1b":   SKIP_PHASE1B,
+            "skip_phase1c":   SKIP_PHASE1C,
             "skip_phase2":    SKIP_PHASE2,
             "gsm_list_file":  "",
             "server_proc":    server_proc,
