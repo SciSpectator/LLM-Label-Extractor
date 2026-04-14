@@ -90,145 +90,99 @@ LABEL_COLS_SCRATCH = ["Tissue", "Condition", "Treatment"]  # annotate from scrat
 # No reasoning, no vocabulary, no normalisation — just structured extraction.
 # ─────────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
-# PER-LABEL SYSTEM PROMPTS (KV-cached by Ollama — sent once per column)
-# These define each agent's role, expertise, and extraction rules.
-# The user message contains ONLY the sample metadata.
+# PER-LABEL EXTRACTION PROMPTS (inline — instructions + metadata in one message)
+# Comprehensive agent definitions with expertise, rules, and examples.
+# Sent as user message with system="" for maximum Ollama throughput.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_TISSUE_SYSTEM_PROMPT = (
-    "You are a biomedical tissue extraction specialist. Your sole task is to "
-    "identify the biological tissue, cell type, or cell line from GEO sample metadata.\n"
+_TISSUE_EXTRACT_PROMPT = (
+    "You are a biomedical tissue extraction specialist. Read ALL metadata below "
+    "and extract the TISSUE / CELL TYPE / CELL LINE.\n"
     "\n"
-    "YOUR EXPERTISE:\n"
-    "- You know all human anatomical tissues and organs\n"
-    "- You know cell types: immune cells, epithelial, endothelial, stem cells, etc.\n"
-    "- You know cell lines: HeLa (cervix), MCF-7 (breast), A549 (lung), HL-60 (blood),\n"
-    "  THP-1 (monocyte), Jurkat (T-cell), K562 (CML), HEK-293 (kidney), etc.\n"
-    "- You understand brain subregions: hippocampus, prefrontal cortex, cerebellum, etc.\n"
+    "YOUR EXPERTISE: anatomical tissues, cell types (immune, epithelial, stem), "
+    "cell lines (HeLa, MCF-7, A549, HL-60, THP-1, Jurkat, K562, HEK-293), "
+    "brain subregions (hippocampus, prefrontal cortex, cerebellum).\n"
     "\n"
-    "HOW TO READ THE METADATA:\n"
-    "- Title: sample name, may contain tissue info or just an ID\n"
-    "- Source: MOST RELIABLE field for tissue — check this first\n"
-    "- Characteristics: key-value pairs, look for 'tissue:', 'cell type:', 'cell line:'\n"
-    "- Description: free-text, may describe the biological material\n"
-    "- Experiment context: the parent study's title and summary\n"
+    "SCAN EVERYTHING — tissue info can be in Title, Source, Characteristics, "
+    "Description, or Experiment context.\n"
     "\n"
-    "EXTRACTION RULES:\n"
-    "1. Extract the MOST SPECIFIC tissue/cell type present\n"
-    "2. Priority: Cell Line > Cell Type > Tissue/Organ\n"
-    "3. Copy exactly what the text says — do NOT rename or generalize\n"
-    "4. For tumor/cancer samples, extract the TISSUE not the disease\n"
-    "   (e.g. 'breast tumor' → Breast, 'colon carcinoma tissue' → Colon)\n"
-    "5. If NOTHING in any field indicates a tissue → Not Specified\n"
-    "6. NEVER extract sample IDs, patient codes, or batch numbers from Title\n"
-    "7. Title Case. One answer only. No explanation.\n"
+    "RULES:\n"
+    "- Most specific term (Alveolar Macrophages not Lung)\n"
+    "- Priority: Cell Line > Cell Type > Tissue/Organ\n"
+    "- Tumor samples → extract TISSUE not disease (breast tumor → Breast)\n"
+    "- Copy exactly. Title Case. One answer. No explanation.\n"
+    "- If absent → Not Specified\n"
     "\n"
-    "EXAMPLES:\n"
-    "  'source: whole blood' → Whole Blood\n"
-    "  'cell type: CD4+ T cells' → CD4+ T Cells\n"
-    "  'tissue: liver biopsy' → Liver Biopsy\n"
-    "  'MCF-7 cell line treated with...' → MCF-7\n"
-    "  'description: RNA from prefrontal cortex' → Prefrontal Cortex\n"
-    "  'description: pancreatic adenocarcinoma patient' → Pancreas\n"
-    "  Title is just 'Sample_001', no other info → Not Specified"
+    "METADATA:\n  Title: {TITLE}\n  Source: {SOURCE}\n  Characteristics: {CHAR}\n"
+    "ANSWER:"
 )
 
-_CONDITION_SYSTEM_PROMPT = (
-    "You are a biomedical condition extraction specialist. Your sole task is to "
-    "identify the disease state, condition, or phenotype from GEO sample metadata.\n"
+_CONDITION_EXTRACT_PROMPT = (
+    "You are a biomedical condition extraction specialist. Read ALL metadata below "
+    "and extract the CONDITION / DISEASE STATE.\n"
     "\n"
-    "YOUR EXPERTISE:\n"
-    "- You know all major human diseases, syndromes, and conditions\n"
-    "- You recognize cancer types: carcinoma, adenocarcinoma, sarcoma, lymphoma,\n"
-    "  leukemia, melanoma, glioma, neuroblastoma, myeloma\n"
-    "- You recognize infections: bacterial (Neisseria, Staphylococcus), viral (HIV,\n"
-    "  HCV, influenza), parasitic\n"
-    "- You recognize genetic conditions: cystic fibrosis (CFTR mutations), Down\n"
-    "  syndrome, Marfan syndrome, CAIS, Huntington's disease\n"
-    "- You recognize phenotypes: obese, diabetic, hypertensive, smoker\n"
-    "- 'Normal', 'Control', 'Healthy', 'Unaffected', 'Wild-type' ALL → Control\n"
+    "YOUR EXPERTISE: cancers (carcinoma, adenocarcinoma, sarcoma, lymphoma, leukemia), "
+    "infections (Neisseria, HIV, HCV), genetic conditions (cystic fibrosis, CAIS, "
+    "Down syndrome), phenotypes (obese, diabetic, smoker).\n"
     "\n"
-    "HOW TO READ THE METADATA:\n"
-    "- Title: may contain disease name, patient ID, or condition code\n"
-    "- Source: rarely has condition info but check anyway\n"
-    "- Characteristics: look for 'disease state:', 'diagnosis:', 'condition:',\n"
-    "  'group:', 'subject status:', 'disease:', 'phenotype:', 'smoking:'\n"
-    "- Description: free-text — diseases often described here\n"
-    "- Experiment context: the parent study reveals the disease being studied\n"
+    "SCAN EVERYTHING — disease info can hide ANYWHERE:\n"
+    "- In Description: 'tumor tissue of pancreatic adenocarcinoma patient'\n"
+    "- In Title: 'CAIS' (Complete Androgen Insensitivity Syndrome)\n"
+    "- In Characteristics: 'disease state:', 'diagnosis:', 'smoking:'\n"
+    "- In Experiment context: study title/summary\n"
     "\n"
-    "CRITICAL: Scan ALL fields. Disease info can hide ANYWHERE:\n"
-    "  'tumor tissue of pancreatic adenocarcinoma patient' → in Description\n"
-    "  'CAIS' → abbreviation in Title\n"
-    "  'infected with Neisseria meningitidis' → infection in Description\n"
+    "RULES:\n"
+    "- Most specific condition present\n"
+    "- Normal/Control/Healthy/Unaffected → Control\n"
+    "- Abbreviations valid: CAIS, AML, HCC, T2D\n"
+    "- Smoking: 0→Never Smoker, 1→Former, 2→Current\n"
+    "- Copy exactly. Title Case. One answer. No explanation.\n"
+    "- If absent → Not Specified\n"
     "\n"
-    "EXTRACTION RULES:\n"
-    "1. Extract the MOST SPECIFIC condition/disease present\n"
-    "2. Copy exactly what the text states — do NOT rename or generalize\n"
-    "3. Abbreviations are valid: 'CAIS', 'AML', 'HCC', 'T2D' — extract them\n"
-    "4. Mutations that imply disease: 'CFTR D508' → CFTR D508\n"
-    "5. Smoking: 'smoking: 0' → Never Smoker, '1' → Former, '2' → Current\n"
-    "6. If sample is healthy/control/normal → Control\n"
-    "7. If NO disease/condition info in ANY field → Not Specified\n"
-    "8. Title Case. One answer only. No explanation.\n"
-    "\n"
-    "EXAMPLES:\n"
-    "  'disease state: hepatocellular carcinoma' → Hepatocellular Carcinoma\n"
-    "  'description: infected with Neisseria meningitidis' → Neisseria Meningitidis Infection\n"
-    "  Title: 'ARD842, CAIS, F, GOF' → CAIS\n"
-    "  'description: pancreatic ductal adenocarcinoma patient' → Pancreatic Ductal Adenocarcinoma\n"
-    "  'group: control' → Control\n"
-    "  No disease info anywhere → Not Specified"
+    "METADATA:\n  Title: {TITLE}\n  Source: {SOURCE}\n  Characteristics: {CHAR}\n"
+    "ANSWER:"
 )
 
-_TREATMENT_SYSTEM_PROMPT = (
-    "You are a biomedical treatment extraction specialist. Your sole task is to "
-    "identify any drug, compound, intervention, or exposure applied to a GEO sample.\n"
+_TREATMENT_EXTRACT_PROMPT = (
+    "You are a biomedical treatment extraction specialist. Read ALL metadata below "
+    "and extract the TREATMENT / DRUG / INTERVENTION.\n"
     "Treatment = something DONE TO or GIVEN TO the patient/sample.\n"
     "\n"
-    "YOUR EXPERTISE:\n"
-    "- You know pharmaceutical drugs: Dexamethasone, Tamoxifen, Methotrexate, etc.\n"
-    "- You know compounds: DMSO (vehicle), estradiol, retinoic acid, TGF-beta\n"
-    "- You know interventions: surgery, radiation, gene knockdown (siRNA, shRNA, CRISPR)\n"
-    "- You know exposures: smoking, UV irradiation, hypoxia, heat shock\n"
-    "- Infections as experimental treatment: 'infected with virus X'\n"
-    "- Vehicle controls: DMSO, PBS, saline, ethanol → Untreated\n"
+    "YOUR EXPERTISE: drugs (Dexamethasone, Tamoxifen), compounds (estradiol, TGF-beta), "
+    "interventions (surgery, siRNA knockdown, CRISPR), exposures (smoking, UV, hypoxia), "
+    "infections as treatment (infected with virus X).\n"
     "\n"
-    "HOW TO READ THE METADATA:\n"
-    "- Characteristics: look for 'treatment:', 'compound:', 'drug:', 'agent:',\n"
-    "  'stimulus:', 'exposure:', 'transfection:'\n"
-    "- Description: free-text — often describes treatment in detail\n"
-    "- Title: may encode treatment (e.g. 'MCF7_Tamoxifen_24h')\n"
-    "- Experiment context: describes the treatment protocol\n"
+    "SCAN EVERYTHING — treatment info can be in Characteristics, Description, "
+    "Title, or Experiment context.\n"
     "\n"
-    "NOT treatments (output Not Specified):\n"
-    "- Diseases/conditions (HIV+, Depression, cancer)\n"
-    "- Tissues/organs (blood, liver, brain)\n"
-    "- Lab protocols (Illumina, TRIzol, RNA extraction, FFPE, RNAlater)\n"
-    "- Sample IDs, batch codes, patient identifiers\n"
+    "NOT treatments: diseases, tissues, lab protocols (Illumina, TRIzol, FFPE), sample IDs.\n"
     "\n"
-    "EXTRACTION RULES:\n"
-    "1. Extract drug/compound/intervention with dose if present\n"
-    "2. Vehicle controls (DMSO, PBS, saline) → Untreated\n"
-    "3. 'smoking: 0' or 'never smoker' → Not Specified (no exposure)\n"
-    "4. If NO treatment applied → Not Specified\n"
-    "5. Title Case. One answer only. No explanation.\n"
+    "RULES:\n"
+    "- Extract drug/compound with dose if present\n"
+    "- Vehicle (DMSO, PBS, saline) → Untreated\n"
+    "- smoking: 0 → Not Specified (no exposure)\n"
+    "- Copy exactly. Title Case. One answer. No explanation.\n"
+    "- If no treatment → Not Specified\n"
     "\n"
-    "EXAMPLES:\n"
-    "  'treatment: Dexamethasone 10nM' → Dexamethasone 10nM\n"
-    "  'compound: Carfilzomib' → Carfilzomib\n"
-    "  'infected with influenza A' → Influenza A Infection\n"
-    "  'treatment: vehicle (DMSO)' → Untreated\n"
-    "  No treatment mentioned → Not Specified"
+    "METADATA:\n  Title: {TITLE}\n  Source: {SOURCE}\n  Characteristics: {CHAR}\n"
+    "ANSWER:"
 )
 
-# System prompts indexed by column name
-_PER_LABEL_SYSTEM_PROMPTS = {
-    "Tissue":    _TISSUE_SYSTEM_PROMPT,
-    "Condition": _CONDITION_SYSTEM_PROMPT,
-    "Treatment": _TREATMENT_SYSTEM_PROMPT,
+# Inline prompts indexed by column name
+_PER_LABEL_EXTRACT_PROMPTS = {
+    "Tissue":    _TISSUE_EXTRACT_PROMPT,
+    "Condition": _CONDITION_EXTRACT_PROMPT,
+    "Treatment": _TREATMENT_EXTRACT_PROMPT,
 }
 
-# User prompt template — metadata only (filled per sample)
+# System prompts kept for Phase 1c (full re-extraction) and collapse agent
+_PER_LABEL_SYSTEM_PROMPTS = {
+    "Tissue":    _TISSUE_EXTRACT_PROMPT.split("METADATA:")[0],
+    "Condition": _CONDITION_EXTRACT_PROMPT.split("METADATA:")[0],
+    "Treatment": _TREATMENT_EXTRACT_PROMPT.split("METADATA:")[0],
+}
+
+# User prompt template for Phase 1c (system+user split for full metadata)
 _EXTRACT_USER_TEMPLATE = (
     "Title: {TITLE}\n"
     "Source: {SOURCE}\n"
@@ -3000,7 +2954,7 @@ def _llm_call_think_off(model: str, prompt: str, ollama_url: str = DEFAULT_URL,
         "model": model,
         "messages": messages,
         "options": {"temperature": 0.0, "num_predict": max_tokens,
-                    "num_ctx": 1024 if system else 512},
+                    "num_ctx": 512},
         "think": False,
         "stream": False,
         "keep_alive": -1,
@@ -5891,23 +5845,20 @@ def pipeline(config: dict, q: queue.Queue):
                     _gse_ctx += f"Summary: {_gse_info['summary'][:250]}\n"
 
                 def _call_one_label(col_):
-                    """One LLM call for one label — system prompt (KV-cached) + user metadata."""
-                    # System prompt = agent definition (cached by Ollama across calls)
-                    sys_prompt_ = _PER_LABEL_SYSTEM_PROMPTS[col_]
-                    # User prompt = only this sample's metadata
-                    user_ = (_EXTRACT_USER_TEMPLATE
+                    """One LLM call for one label — inline prompt (fast, no KV cache thrash)."""
+                    prompt_ = (_PER_LABEL_EXTRACT_PROMPTS[col_]
                         .replace("{TITLE}", _title)
                         .replace("{SOURCE}", _source)
                         .replace("{CHAR}", _char))
                     if _desc:
-                        user_ += f"\nDescription: {_desc}"
+                        prompt_ += f"\nDescription: {_desc}"
                     if _gse_ctx:
-                        user_ += f"\n{_gse_ctx}"
+                        prompt_ += f"\n{_gse_ctx}"
                     text_ = ""
                     for _attempt in range(3):
                         text_ = worker_._llm_with_model(
-                            user_, model=EXTRACTION_MODEL,
-                            max_tokens=60, system=sys_prompt_)
+                            prompt_, model=EXTRACTION_MODEL,
+                            max_tokens=60, system="")
                         if text_:
                             break
                         time.sleep(3 * (_attempt + 1))
