@@ -6112,15 +6112,116 @@ def pipeline(config: dict, q: queue.Queue):
                 except Exception:
                     pass
 
+            #  Phase 1c: Full-metadata re-extraction for remaining NS fields
+            # Samples STILL NS after Phase 1+1b are re-processed with NO char limits
+            # on Description and Summary — ensures no information loss.
+            _ns_after_all = [(gsm_, labs_) for gsm_, labs_ in phase1_extracted.items()
+                             if any(is_ns(labs_.get(c, NS)) for c in _cols)]
+            if _ns_after_all:
+                log(f"\n🔬 Phase 1c: Full-metadata re-extraction for {len(_ns_after_all):,} "
+                    f"samples still with NS fields …")
+                log(f"  No character limits on Description/Summary — full metadata scan")
+                prog(35, f"Phase 1c: full re-extraction ({len(_ns_after_all):,} NS samples)")
+                _p1c_resolved = [0]
+
+                def _p1c_extract(args):
+                    gsm_, labs_ = args
+                    if stop_evt.is_set():
+                        return
+                    raw_ = raw_map.get(gsm_, {})
+                    # Get GSE for this GSM
+                    gse_ = ""
+                    try:
+                        gse_ = gsm_to_gse_map.get(gsm_, "")
+                    except NameError:
+                        pass
+                    if not gse_:
+                        gse_ = str(raw_.get("series_id", ""))
+                    if not gse_:
+                        _t = target[target["gsm"] == gsm_]
+                        if len(_t) > 0:
+                            gse_ = str(_t.iloc[0].get("series_id", ""))
+                    worker_ = _p1_workers.get(gse_) or GSEWorker(
+                        gse_, GSEContext(gse_), model, ollama_url,
+                        watchdog, mem_agent=mem_agent, platform=platform_id)
+
+                    # Full metadata — NO truncation limits
+                    _title = str(raw_.get("gsm_title", "")).strip()
+                    _source = str(raw_.get("source_name", "")).strip()
+                    _char = str(raw_.get("characteristics", "")).replace("\t", " ").strip()
+                    _desc = str(raw_.get("description", "")).replace("\t", " ").strip()
+                    _gse_info = gse_meta.get(gse_, {})
+                    _gse_ctx = ""
+                    if _gse_info.get("title"):
+                        _gse_ctx += f"Experiment: {_gse_info['title']}\n"
+                    if _gse_info.get("summary"):
+                        _gse_ctx += f"Summary: {_gse_info['summary']}\n"
+                    if _gse_info.get("overall_design"):
+                        _gse_ctx += f"Design: {_gse_info['overall_design'][:500]}\n"
+
+                    # Only re-extract NS columns
+                    ns_cols_ = [c for c in _cols if is_ns(labs_.get(c, NS))]
+                    for col_ in ns_cols_:
+                        sys_prompt_ = _PER_LABEL_SYSTEM_PROMPTS[col_]
+                        user_ = (_EXTRACT_USER_TEMPLATE
+                            .replace("{TITLE}", _title[:200])
+                            .replace("{SOURCE}", _source[:200])
+                            .replace("{CHAR}", _char[:800]))
+                        if _desc:
+                            user_ += f"\nDescription: {_desc[:2000]}"
+                        if _gse_ctx:
+                            user_ += f"\n{_gse_ctx[:1000]}"
+
+                        text_ = ""
+                        for _attempt in range(3):
+                            text_ = worker_._llm_with_model(
+                                user_, model=EXTRACTION_MODEL,
+                                max_tokens=60, system=sys_prompt_)
+                            if text_:
+                                break
+                            time.sleep(2)
+                        answer_ = _parse_single_label(text_)
+                        if answer_ and not is_ns(answer_):
+                            labs_[col_] = answer_
+                            _p1c_resolved[0] += 1
+
+                    phase1_extracted[gsm_] = labs_
+
+                # Process sequentially (these are the hard cases)
+                for i, args in enumerate(_ns_after_all):
+                    if stop_evt.is_set():
+                        break
+                    _throttle_sem.acquire()
+                    try:
+                        _p1c_extract(args)
+                    finally:
+                        _throttle_sem.release()
+                    if (i + 1) % 100 == 0:
+                        log(f"  Phase 1c: {i+1}/{len(_ns_after_all)} "
+                            f"| resolved {_p1c_resolved[0]} fields")
+
+                log(f"  Phase 1c complete — {_p1c_resolved[0]} additional fields resolved "
+                    f"from full metadata")
+                for c in _cols:
+                    _ns_c = sum(1 for labs in phase1_extracted.values() if is_ns(labs.get(c, NS)))
+                    log(f"    {c}: {_ns_c:,} still NS")
+
+                # Save checkpoint after P1c
+                try:
+                    with open(_p1_ckpt, "w") as _f:
+                        json.dump(phase1_extracted, _f)
+                except Exception:
+                    pass
+
             # ── Skip Phase 2 if requested ──
             if config.get("skip_phase2", False):
-                log(f"\n✅ Phase 1 + 1b complete — skipping Phase 2 (skip_phase2=True)")
+                log(f"\n✅ Phase 1 + 1b + 1c complete — skipping Phase 2 (skip_phase2=True)")
                 log(f"  Phase 1 checkpoint: {_p1_ckpt}")
                 _gsm2gse = dict(zip(target["gsm"], target["series_id"]))
                 import json as _json2
                 _p1_only = os.path.join(run_dir, "checkpoints", "phase1_only_extracted.json")
                 _p1_combined = os.path.join(run_dir, "checkpoints", "phase1_extracted.json")
-                for src, name in [(_p1_only, "labels_raw.csv"), (_p1_combined, "labels_phase1b.csv")]:
+                for src, name in [(_p1_only, "labels_raw.csv"), (_p1_combined, "labels_phase1b_1c.csv")]:
                     if os.path.isfile(src):
                         with open(src) as _f:
                             _data = _json2.load(_f)
