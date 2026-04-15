@@ -100,7 +100,8 @@ _TISSUE_EXTRACT_PROMPT = (
     "Read ALL fields (Title, Source, Characteristics, Description, Experiment).\n"
     "Priority: Cell Line > Cell Type > Tissue. Most specific term.\n"
     "Tumor samples → extract the TISSUE (breast tumor → Breast).\n"
-    "If absent → Not Specified. Title Case. One answer only.\n"
+    "If MULTIPLE tissues/cell types → list ALL separated by semicolon.\n"
+    "If absent → Not Specified. Title Case.\n"
     "METADATA:\n  Title: {TITLE}\n  Source: {SOURCE}\n  Characteristics: {CHAR}\n"
     "ANSWER:"
 )
@@ -110,7 +111,8 @@ _CONDITION_EXTRACT_PROMPT = (
     "Read ALL fields — disease hides in Description, Title, Characteristics, Experiment.\n"
     "Cancer/infection/syndrome/phenotype all count. Abbreviations valid (CAIS, AML, HCC).\n"
     "Normal/Control/Healthy → Control. Smoking: 0→Never, 1→Former, 2→Current.\n"
-    "If absent → Not Specified. Title Case. One answer only.\n"
+    "If MULTIPLE conditions → list ALL separated by semicolon.\n"
+    "If absent → Not Specified. Title Case.\n"
     "METADATA:\n  Title: {TITLE}\n  Source: {SOURCE}\n  Characteristics: {CHAR}\n"
     "ANSWER:"
 )
@@ -120,7 +122,8 @@ _TREATMENT_EXTRACT_PROMPT = (
     "Read ALL fields. Treatment = something DONE TO the patient/sample.\n"
     "NOT treatments: diseases, tissues, lab protocols (Illumina, TRIzol, FFPE).\n"
     "Vehicle (DMSO, PBS) → Untreated. smoking:0 → Not Specified.\n"
-    "If no treatment → Not Specified. Title Case. One answer only.\n"
+    "If MULTIPLE treatments → list ALL separated by semicolon.\n"
+    "If no treatment → Not Specified. Title Case.\n"
     "METADATA:\n  Title: {TITLE}\n  Source: {SOURCE}\n  Characteristics: {CHAR}\n"
     "ANSWER:"
 )
@@ -177,7 +180,8 @@ _TISSUE_INFER_SYSTEM = (
     "EXPERIMENT DESIGN: {GSE_DESIGN}\n\n"
     "Based on this experiment context, INFER the tissue or cell type.\n"
     "If the experiment uses a specific tissue, this sample is from that tissue.\n"
-    "Be specific. Unknown = Not Specified. One answer only."
+    "Be specific. Unknown = Not Specified.\n"
+    "If MULTIPLE tissues/cell types → list ALL separated by semicolon."
 )
 _CONDITION_INFER_SYSTEM = (
     "You are a disease/condition annotator. This sample is part of "
@@ -188,7 +192,8 @@ _CONDITION_INFER_SYSTEM = (
     "Based on this experiment context, INFER the disease or condition.\n"
     "If the experiment studies a disease, this sample has that condition.\n"
     "Control/healthy in disease study = Control.\n"
-    "Be specific. Unknown = Not Specified. One answer only."
+    "Be specific. Unknown = Not Specified.\n"
+    "If MULTIPLE conditions → list ALL separated by semicolon."
 )
 _TREATMENT_INFER_SYSTEM = (
     "You are a treatment/drug annotator. This sample is part of "
@@ -203,7 +208,7 @@ _TREATMENT_INFER_SYSTEM = (
     "'Control' or 'Normal' = NOT a treatment.\n"
     "Observational disease-vs-control studies have NO treatment → Not Specified.\n"
     "Vehicle/DMSO/PBS alone = Untreated. No drug applied = Not Specified.\n"
-    "One answer only."
+    "If MULTIPLE treatments → list ALL separated by semicolon."
 )
 _PER_LABEL_INFER_SYSTEMS = {
     "Tissue":    _TISSUE_INFER_SYSTEM,
@@ -275,8 +280,9 @@ def _parse_json_extraction(text: str, cols: list) -> dict:
 
 
 def _parse_single_label(text: str) -> str:
-    """Parse a single label from a per-label LLM agent response.
-    The agent outputs just one label (no JSON), so we clean it up.
+    """Parse label(s) from a per-label LLM agent response.
+    Supports multiple values separated by semicolons.
+    Cleans up each value and joins with '; '.
     Falls back to JSON parsing if the response contains braces.
     """
     if not text:
@@ -289,7 +295,6 @@ def _parse_single_label(text: str) -> str:
         if m:
             try:
                 data = _json.loads(m.group(0))
-                # Return the first non-empty value
                 for v in data.values():
                     v = str(v).strip()
                     if v and v.lower() not in ('none', 'null', '', 'not specified',
@@ -304,9 +309,17 @@ def _parse_single_label(text: str) -> str:
         if line.lower().startswith(('answer:', 'tissue:', 'condition:',
                                      'treatment:', 'note:', 'rules:')):
             line = line.split(':', 1)[1].strip() if ':' in line else ''
-        if line and line.lower() not in ('none', 'null', '', 'not specified',
-                                          'n/a', 'unknown', 'untreated'):
-            return line
+        if not line or line.lower() in ('none', 'null', '', 'not specified',
+                                         'n/a', 'unknown'):
+            continue
+        # Clean semicolon-separated multi-values
+        if ';' in line:
+            parts = [p.strip().rstrip('.') for p in line.split(';')]
+            parts = [p for p in parts if p and p.lower() not in
+                     ('none', 'null', '', 'not specified', 'n/a', 'unknown')]
+            if parts:
+                return '; '.join(parts)
+        return line
     return NS
 
 
