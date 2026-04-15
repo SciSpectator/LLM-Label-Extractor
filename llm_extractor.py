@@ -3236,11 +3236,11 @@ class GSMExtractor:
                 cols: list = None) -> Dict[str, str]:
         """Extract labels from one GSM sample. Returns {col: label}."""
         _cols = cols or LABEL_COLS_SCRATCH
-        _title  = str(raw.get("gsm_title", "")).strip()[:80]
-        _source = str(raw.get("source_name", "")).strip()[:80]
-        _char   = str(raw.get("characteristics", "")).replace("\t", " ").strip()[:300]
-        _treat  = str(raw.get("treatment_protocol", "")).replace("\t", " ").strip()[:200]
-        _desc   = str(raw.get("description", "")).replace("\t", " ").strip()[:200]
+        _title  = str(raw.get("gsm_title", "")).strip()
+        _source = str(raw.get("source_name", "")).strip()
+        _char   = str(raw.get("characteristics", "")).replace("\t", " ").strip()
+        _treat  = str(raw.get("treatment_protocol", "")).replace("\t", " ").strip()
+        _desc   = str(raw.get("description", "")).replace("\t", " ").strip()
         prompt  = (_EXTRACTION_PROMPT_TEMPLATE
                    .replace("{TITLE}", _title)
                    .replace("{SOURCE}", _source)
@@ -3307,9 +3307,9 @@ class GSEInferencer:
         ns_fields = [c for c in _cols if is_ns(current_labels.get(c, NS))]
         if not ns_fields:
             return current_labels
-        _title  = str(raw.get("gsm_title", "")).strip()[:80]
-        _source = str(raw.get("source_name", "")).strip()[:80]
-        _char   = str(raw.get("characteristics", "")).replace("\t", " ").strip()[:300]
+        _title  = str(raw.get("gsm_title", "")).strip()
+        _source = str(raw.get("source_name", "")).strip()
+        _char   = str(raw.get("characteristics", "")).replace("\t", " ").strip()
         user_msg = (f"Title: {_title}\nSource: {_source}\n"
                     f"Characteristics: {_char}\n"
                     f"ANSWER:")
@@ -3835,11 +3835,11 @@ class GSEWorker:
         else:
             #  Step 1a : Combined raw extraction  Tissue + Condition together
             # One LLM call extracts BOTH fields from the same raw GSM metadata.
-            _r_title  = str(raw.get("gsm_title","")).strip()[:80]
-            _r_source = str(raw.get("source_name","")).strip()[:80]
-            _r_char   = str(raw.get("characteristics","")).replace("\t"," ").strip()[:300]
-            _r_treat  = str(raw.get("treatment_protocol","")).replace("\t"," ").strip()[:200]
-            _r_desc   = str(raw.get("description","")).replace("\t"," ").strip()[:200]
+            _r_title  = str(raw.get("gsm_title","")).strip()
+            _r_source = str(raw.get("source_name","")).strip()
+            _r_char   = str(raw.get("characteristics","")).replace("\t"," ").strip()
+            _r_treat  = str(raw.get("treatment_protocol","")).replace("\t"," ").strip()
+            _r_desc   = str(raw.get("description","")).replace("\t"," ").strip()
             combined_p1a = (_EXTRACTION_PROMPT_TEMPLATE
                 .replace("{TITLE}", _r_title)
                 .replace("{SOURCE}", _r_source)
