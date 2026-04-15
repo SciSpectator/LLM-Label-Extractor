@@ -100,7 +100,7 @@ _TISSUE_EXTRACT_PROMPT = (
     "Read ALL fields (Title, Source, Characteristics, Description, Experiment).\n"
     "Priority: Cell Line > Cell Type > Tissue. Most specific term.\n"
     "Tumor samples → extract the TISSUE (breast tumor → Breast).\n"
-    "If MULTIPLE tissues/cell types → list ALL separated by semicolon.\n"
+    "If MULTIPLE tissues → list ALL separated by semicolon.\n"
     "If absent → Not Specified. Title Case.\n"
     "METADATA:\n  Title: {TITLE}\n  Source: {SOURCE}\n  Characteristics: {CHAR}\n"
     "ANSWER:"
@@ -110,7 +110,17 @@ _CONDITION_EXTRACT_PROMPT = (
     "Extract the CONDITION / DISEASE from this GEO sample.\n"
     "Read ALL fields — disease hides in Description, Title, Characteristics, Experiment.\n"
     "Cancer/infection/syndrome/phenotype all count. Abbreviations valid (CAIS, AML, HCC).\n"
-    "Normal/Control/Healthy → Control. Smoking: 0→Never, 1→Former, 2→Current.\n"
+    "\n"
+    "IMPORTANT — GEO metadata often uses CODED values (0/1, Y/N, Yes/No, True/False)\n"
+    "to indicate presence or absence of a condition. The field NAME tells you WHAT\n"
+    "the condition is, and the VALUE tells you whether this sample HAS it or not.\n"
+    "If the value indicates ABSENCE (0, N, No, None, negative, False, non-) → Control.\n"
+    "If the value indicates PRESENCE (1, Y, Yes, positive, True) → extract the condition\n"
+    "name FROM THE FIELD NAME, not the coded value itself.\n"
+    "Numeric scales (0/1/2/3) often encode severity or categories — read the field\n"
+    "description to understand what each number means.\n"
+    "\n"
+    "Normal/Control/Healthy → Control.\n"
     "If MULTIPLE conditions → list ALL separated by semicolon.\n"
     "If absent → Not Specified. Title Case.\n"
     "METADATA:\n  Title: {TITLE}\n  Source: {SOURCE}\n  Characteristics: {CHAR}\n"
@@ -121,6 +131,11 @@ _TREATMENT_EXTRACT_PROMPT = (
     "Extract the TREATMENT / DRUG / INTERVENTION applied to this GEO sample.\n"
     "Read ALL fields. Treatment = something DONE TO the patient/sample.\n"
     "NOT treatments: diseases, tissues, lab protocols (Illumina, TRIzol, FFPE).\n"
+    "\n"
+    "IMPORTANT — coded values (0/1, Y/N, None) in treatment fields indicate\n"
+    "presence or absence. If the value means NO treatment was applied → Not Specified.\n"
+    "If the value means treatment WAS applied → extract the treatment name from context.\n"
+    "\n"
     "Vehicle (DMSO, PBS) → Untreated. smoking:0 → Not Specified.\n"
     "If MULTIPLE treatments → list ALL separated by semicolon.\n"
     "If no treatment → Not Specified. Title Case.\n"
@@ -1533,6 +1548,7 @@ def prompt_semantic_collapse(col: str, extracted: str,
 CKPT_EVERY    = 1000        # checkpoint every N resolved NS samples
 DEFAULT_MODEL = "gemma2:2b"   # single model for extraction + collapse — max GPU parallelism
 DEFAULT_URL   = "http://localhost:11434"
+LLM_NUM_CTX   = int(os.environ.get("LLM_NUM_CTX", 4096))  # context window — 4096 for HPC, lower for low-VRAM
 NCBI_WORKERS  = 5
 NCBI_DELAY    = 0.35
 
@@ -2924,7 +2940,7 @@ def _llm_call_think_off(model: str, prompt: str, ollama_url: str = DEFAULT_URL,
         "model": model,
         "messages": messages,
         "options": {"temperature": 0.0, "num_predict": max_tokens,
-                    "num_ctx": 512},
+                    "num_ctx": LLM_NUM_CTX},
         "think": False,
         "stream": False,
         "keep_alive": -1,
@@ -5800,19 +5816,19 @@ def pipeline(config: dict, q: queue.Queue):
                 raw_block = format_sample_for_extraction(raw_)
                 if raw_block == "(no metadata)":
                     log(f"  [P1 WARN] {gsm_}: no metadata")
-                # Common metadata fields
-                _title = str(raw_.get("gsm_title","")).strip()[:80]
-                _source = str(raw_.get("source_name","")).strip()[:80]
-                _char = str(raw_.get("characteristics","")).replace("\t"," ").strip()[:300]
-                _treat = str(raw_.get("treatment_protocol","")).replace("\t"," ").strip()[:200]
-                _desc = str(raw_.get("description","")).replace("\t"," ").strip()[:200]
+                # Common metadata fields — no char limits (num_ctx handles truncation)
+                _title = str(raw_.get("gsm_title","")).strip()
+                _source = str(raw_.get("source_name","")).strip()
+                _char = str(raw_.get("characteristics","")).replace("\t"," ").strip()
+                _treat = str(raw_.get("treatment_protocol","")).replace("\t"," ").strip()
+                _desc = str(raw_.get("description","")).replace("\t"," ").strip()
                 # GSE experiment context for THIS sample's experiment
                 _gse_info = gse_meta.get(gse_, {})
                 _gse_ctx = ""
                 if _gse_info.get("title"):
-                    _gse_ctx += f"Experiment: {_gse_info['title'][:120]}\n"
+                    _gse_ctx += f"Experiment: {_gse_info['title']}\n"
                 if _gse_info.get("summary"):
-                    _gse_ctx += f"Summary: {_gse_info['summary'][:250]}\n"
+                    _gse_ctx += f"Summary: {_gse_info['summary']}\n"
 
                 def _call_one_label(col_):
                     """One LLM call for one label — inline prompt (fast, no KV cache thrash)."""

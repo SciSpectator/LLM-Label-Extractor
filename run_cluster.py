@@ -22,6 +22,7 @@ Environment variables:
   USE_FAKE_OLLAMA  - "1" to skip ollama startup (use pre-started fake_ollama_lb)
   OLLAMA_URL       - ollama API URL (default: http://localhost:11434)
   NUM_WORKERS      - override auto-detected worker count
+  LLM_NUM_CTX      - context window size (default: 4096, lower for low-VRAM GPUs)
 
 Usage:
   # Standard (local Ollama GPU):
