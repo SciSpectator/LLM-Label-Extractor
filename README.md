@@ -1,6 +1,6 @@
 <p align="center">
   <br>
-  <img src="https://img.shields.io/badge/LLM--Label--Extractor-v2.1-blueviolet?style=for-the-badge" alt="LLM-Label-Extractor v2.1">
+  <img src="https://img.shields.io/badge/LLM--Label--Extractor-v2.2-blueviolet?style=for-the-badge" alt="LLM-Label-Extractor v2.1">
   <br><br>
   <strong>LLM-Label-Extractor</strong><br>
   <em>Multi-agent pipeline for extracting and normalizing biomedical metadata labels from GEO microarray data</em>
@@ -23,7 +23,7 @@
 
 **LLM-Label-Extractor** is a multi-agent pipeline that extracts and normalizes **Tissue**, **Condition**, and **Treatment** metadata labels from [Gene Expression Omnibus (GEO)](https://www.ncbi.nlm.nih.gov/geo/) microarray data using local LLMs. It runs entirely offline via [Ollama](https://ollama.com/) -- no API keys, no cloud, no data leaves your machine.
 
-**New in v2.1:** Phase 2 collapse overhauled with **retrieval-augmented LLM reasoning** -- BioLORD-2023 biomedical embeddings find the 20 most relevant canonical clusters, then `gemma4:e2b` picks the best match (~700ms/label, 0% orphan cluster pollution). Includes `skip_phase2` GUI option, per-phase evaluation snapshots, and CREEDS benchmark suite.
+**New in v2.2:** Complete pipeline overhaul — gemma4:e2b as sole model, Phase 1c (zero char limits), multi-value extraction (semicolons), coded value interpretation (0/1/Y/N), BioLORD-2023 retrieval collapse with per-GSE working memory, configurable num_ctx for HPC clusters.
 
 ---
 
@@ -69,7 +69,9 @@ The pipeline uses a **multi-agent swarm** where each GEO experiment (GSE) is han
 
 4. **Phase 1b: Infer** -- For fields still marked `Not Specified`, the pipeline re-infers labels from the full GSE experiment description. Each label column has its own per-label inference agent with GSE context as a KV-cached system prompt.
 
-5. **Phase 2: Collapse** -- Retrieval-augmented LLM reasoning normalizes raw labels to canonical clusters:
+5. **Phase 1c: Full Re-extract** -- Samples STILL `Not Specified` after Phase 1b are re-processed with **zero character limits** on all metadata fields and `num_ctx=4096`. This ensures no information loss for the hardest cases where disease/tissue info appears deep in the metadata text.
+
+6. **Phase 2: Collapse** -- Retrieval-augmented LLM reasoning normalizes raw labels to canonical clusters:
    - **Step 1: Episodic cache** -- If this raw label was resolved before, return the cached result instantly (<1ms). Handles ~55% of labels on typical platforms.
    - **Step 2: Semantic retrieval** -- Embed the raw label with [BioLORD-2023](https://huggingface.co/FremyCompany/BioLORD-2023-C) (biomedical SOTA, runs on CPU), find the top-20 most similar canonical clusters from the vocabulary DB via cosine similarity (~17ms).
    - **Step 3: LLM reasoning** -- `gemma4:e2b` (`think=false`) picks the best canonical cluster from the 20 candidates (~700ms). The LLM preserves specificity (e.g., "Cerebral Cortex" stays as-is, not collapsed to "Brain") while normalizing naming and stripping qualifiers.
@@ -83,17 +85,17 @@ The pipeline uses a **multi-agent swarm** where each GEO experiment (GSE) is han
 
 ## Minimum Requirements
 
-| Resource | Minimum (gemma2:2b) | Minimum (gemma4:e2b) | Recommended |
-|---|---|---|---|
-| **CPU** | 4 cores | 4 cores | 8+ cores |
-| **RAM** | 8 GB | 8 GB | 16+ GB |
-| **Disk** | 25 GB free | 25 GB free | 50+ GB free |
-| **GPU** | Not required | 4+ GB VRAM | 8+ GB VRAM |
-| **OS** | Linux, macOS, or Windows 10+ | Linux, macOS, or Windows 10+ | Ubuntu 22.04+ / macOS 13+ |
-| **Python** | 3.8+ | 3.8+ | 3.10+ |
-| **Ollama** | Latest stable | Latest stable | Latest stable |
+| Resource | Minimum | Recommended |
+|---|---|---|
+| **CPU** | 4 cores | 8+ cores |
+| **RAM** | 8 GB | 16+ GB |
+| **Disk** | 25 GB free | 50+ GB free |
+| **GPU** | 8+ GB VRAM | 12+ GB VRAM |
+| **OS** | Linux, macOS, or Windows 10+ | Ubuntu 22.04+ / macOS 13+ |
+| **Python** | 3.8+ | 3.10+ |
+| **Ollama** | Latest stable | Latest stable |
+| **Model** | gemma4:e2b (7.2 GB VRAM) | gemma4:e2b |
 
-> **Note:** GPU is optional for `gemma2:2b` but recommended for `gemma4:e2b` due to higher VRAM requirements. Without GPU, both models run on CPU via Ollama.
 
 ---
 
@@ -148,8 +150,6 @@ curl -fsSL https://ollama.com/install.sh | sh
 # Pull the default model
 ollama pull gemma4:e2b
 
-# (Optional) Pull gemma2:2b for low-VRAM setups
-ollama pull gemma2:2b
 ```
 
 #### macOS
@@ -167,8 +167,6 @@ ollama serve &
 # Pull the default model
 ollama pull gemma4:e2b
 
-# (Optional) Pull gemma2:2b for low-VRAM setups
-ollama pull gemma2:2b
 ```
 
 #### Windows
@@ -185,8 +183,6 @@ winget install Ollama.Ollama
 # Pull the default model
 ollama pull gemma4:e2b
 
-# (Optional) Pull gemma2:2b for low-VRAM setups
-ollama pull gemma2:2b
 ```
 
 ### 5. Download GEOmetadb
@@ -256,8 +252,9 @@ python run_gui.py
 1. Select the **GEOmetadb.sqlite** file path
 2. Choose **Species** (any organism available in GEOmetadb)
 3. Choose **Technology** (any platform technology available in GEOmetadb)
-4. Select **LLM Model** -- `gemma4:e2b` is the default; choose `gemma2:2b` for low-VRAM setups
-5. Click **Start** -- the pipeline will discover platforms, then process each through all three phases
+4. Select **LLM Model** -- `gemma4:e2b` is the default
+5. Select **Phases** -- check/uncheck Phase 1, 1b, 1c, 2 as needed
+6. Click **Start** -- the pipeline will discover platforms and process each through selected phases
 
 ### CLI / HPC Batch Mode (`run_cluster.py`)
 
@@ -347,20 +344,6 @@ config["platform"] = config["platforms"][0][0]
 G.pipeline_multi(config, q)
 ```
 
-### Switching to gemma2:2b (low-VRAM)
-
-The default model is `gemma4:e2b` (requires 7.2 GB VRAM). To use `gemma2:2b` (2 GB VRAM) instead:
-
-**GUI:** Select `gemma2:2b` from the Model dropdown.
-
-**CLI:** Edit the top of `run_cluster.py`:
-```python
-MODEL            = "gemma2:2b"
-EXTRACTION_MODEL = "gemma2:2b"
-```
-
-> **Important:** Make sure you have pulled the model first: `ollama pull gemma4:e2b`
-
 #### How gemma4:e2b Differs
 
 The `gemma4:e2b` model (Google Gemma 4, 2B Edge) brings several improvements:
@@ -393,7 +376,6 @@ source /path/to/LLM-Label-Extractor/venv/bin/activate
 # Start Ollama if not running as a service
 ollama serve &
 sleep 5
-ollama pull gemma2:2b         # or: ollama pull gemma4:e2b
 
 # Run the pipeline
 python run_cluster.py
@@ -597,14 +579,12 @@ systemctl start ollama   # systemd (Linux)
 ### Model not found
 
 ```
-Error: model "gemma2:2b" not found
+Error: model "gemma4:e2b" not found
 ```
 
 **Fix:** Pull the model:
 ```bash
 ollama pull gemma4:e2b
-# OR for low-VRAM:
-ollama pull gemma2:2b
 ```
 
 ### GEOmetadb not found
