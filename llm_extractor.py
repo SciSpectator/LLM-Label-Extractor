@@ -83,7 +83,7 @@ LABEL_COLS_SCRATCH = ["Tissue", "Condition", "Treatment"]  # annotate from scrat
 # Ollama caches the KV of the system prompt across calls from the same session.
 # Only the user message (raw metadata) changes per sample — saves ~40% latency.
 # ─────────────────────────────────────────────────────────────────────────────
-# PER-LABEL EXTRACTION PROMPTS  (gemma2:2b, Phase 1)
+# PER-LABEL EXTRACTION PROMPTS  (gemma4:e2b, Phase 1)
 # Each label has its OWN LLM agent with a focused, domain-specific prompt.
 # 3 independent calls run in parallel — one per label column.
 # Purpose: READ the raw GEO text and COPY the value out as-is.
@@ -183,7 +183,7 @@ _EXTRACTION_PROMPT_TEMPLATE = (
 _EXTRACTION_SYSTEM_PROMPT = ""  # not used
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PER-LABEL NS INFERENCE PROMPTS  (gemma2:2b, Phase 1b)
+# PER-LABEL NS INFERENCE PROMPTS  (gemma4:e2b, Phase 1b)
 # Each label has its OWN GSE-context inference agent.
 # GSE experiment context is SYSTEM prompt (KV cached by Ollama).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1546,7 +1546,7 @@ def prompt_semantic_collapse(col: str, extracted: str,
 
 
 CKPT_EVERY    = 1000        # checkpoint every N resolved NS samples
-DEFAULT_MODEL = "gemma2:2b"   # single model for extraction + collapse — max GPU parallelism
+DEFAULT_MODEL = "gemma4:e2b"   # default model for all phases
 DEFAULT_URL   = "http://localhost:11434"
 LLM_NUM_CTX   = int(os.environ.get("LLM_NUM_CTX", 4096))  # context window — 4096 for HPC, lower for low-VRAM
 NCBI_WORKERS  = 5
@@ -1571,6 +1571,7 @@ MODEL_RAM_GB = {
     "gemma2:9b-q4_0":                    5.0,
     "gemma2:9b-q8_0":                    9.5,
     "gemma2:27b":                        18.0,
+    "gemma4:e2b":                        7.2,
     "llama3:8b":                         5.5,
     "llama3.1:8b":                       5.5,
     "llama3:70b":                        48.0,
@@ -1636,7 +1637,7 @@ def compute_ollama_parallel(model: str,
     Returns (total_workers, gpu_workers, cpu_workers) so the caller
     can log the breakdown clearly.
 
-    Example  11GB GPU + 600GB RAM + 12 CPUs, gemma2:9b (5.4GB):
+    Example  11GB GPU + 600GB RAM + 12 CPUs, gemma4:e2b (7.2GB):
         gpu_workers  = int(10 / 5.4)       = 1   (10GB free after OS)
         ram_after    = 600 - 4 - 1*5.4     = 590.6 GB still free
         ram_slots    = int(590.6 / 5.4)    = 109  (RAM is not the limit)
@@ -1660,7 +1661,7 @@ def compute_ollama_parallel(model: str,
         # or total_vram (which ignores real OS overhead).
         # Strategy: total_vram - actual_model_vram_footprint - 1GB_OS_reserve
         #           = headroom available for KV cache of parallel slots.
-        # KV cache per parallel slot  slot_gb * 0.15 (empirical for gemma2:9b)
+        # KV cache per parallel slot  slot_gb * 0.15 (empirical for gemma4:e2b)
         if gpus:
             total_vram  = sum(g["vram_gb"] for g in gpus)
             # Try to get actual model VRAM from Ollama
@@ -2591,7 +2592,7 @@ class GSEContext:
 
 
 # 
-#  PROMPT BUILDERS    short, direct, gemma2:9b-friendly
+#  PROMPT BUILDERS    short, direct, gemma4:e2b-friendly
 #  Rule: keep total prompt under ~600 tokens so num_ctx=2048 is always safe
 # 
 def _sanitize(text, max_chars: int = 400) -> str:
@@ -2605,7 +2606,7 @@ EXTRACTION_MODEL   = "gemma4:e2b"   # gemma4 edge model — better reasoning, th
 
 def format_sample_for_extraction(raw: dict) -> str:
     """
-    Format raw GEO metadata as structured compact input for gemma2:2b.
+    Format raw GEO metadata as structured compact input for gemma4:e2b.
     Matches the IN:/OUT: examples in _EXTRACTION_SYSTEM_PROMPT exactly.
     """
     def _s(v):
@@ -2797,7 +2798,7 @@ def clean_output(text: str) -> str:
     if not lines:
         return ""
     out = lines[0]
-    # gemma2:9b sometimes echoes the field name prefix back, e.g. "Tissue: brain"
+    # gemma4:e2b sometimes echoes the field name prefix back, e.g. "Tissue: brain"
     # or "Condition: Alzheimer Disease" — strip it
     for prefix in ("tissue:", "condition:", "treatment:",
                    "tissue :", "condition :", "treatment :"):
@@ -3188,7 +3189,7 @@ class GSMExtractor:
               + optional GSE title/summary (appended to prompt)
     Memory  : None (deterministic prompt → LLM → JSON parse)
     Tools   : None
-    Model   : gemma2:2b
+    Model   : gemma4:e2b
     """
 
     def __init__(self, ollama_url: str, watchdog=None, log_fn=None):
@@ -4349,7 +4350,7 @@ class GSEWorker:
         # ── ReAct loop ────────────────────────────────────────────────────────
         for turn in range(MAX_TURNS):
             # Retry up to 3 times on empty response — Ollama may still be
-            # loading gemma2:9b from VRAM after an idle period
+            # loading model from VRAM after an idle period
             response = ""
             for _llm_attempt in range(3):
                 response = self._llm_chat(messages, max_tokens=120)
@@ -5764,7 +5765,7 @@ def pipeline(config: dict, q: queue.Queue):
             config.get("_multi_mode") or
             config.get("_db_platform_mode"))
         # Always run Phase 1 bulk extraction — even in repair mode.
-        # This extracts all NS samples with gemma2:2b in parallel FIRST,
+        # This extracts all NS samples with gemma4:e2b in parallel FIRST,
         # Phase 2 collapse uses same model as extraction (retrieval + LLM reasoning).
         if True:  # was: if scratch_mode:
             q.put({"type": "show_treatment_bar"})  # unhide Treatment row immediately
@@ -8525,12 +8526,12 @@ class App(tk.Tk):
                     log(f"[ERROR] Ollama not reachable at {config['ollama_url']}")
                     q.put({"type": "done", "success": False}); return
 
-            # Auto-pull gemma2:2b extraction model if not available
+            # Auto-pull extraction model if not available
             if not model_available(EXTRACTION_MODEL, config["ollama_url"]):
                 log(f"Pulling extraction model {EXTRACTION_MODEL} ...")
                 pull_model_blocking(EXTRACTION_MODEL, log)
                 log(f"{EXTRACTION_MODEL} ready.")
-            # Auto-pull gemma2:2b before pipeline starts
+            # Auto-pull model before pipeline starts
             if not model_available(EXTRACTION_MODEL, config["ollama_url"]):
                 log(f"Pulling {EXTRACTION_MODEL} ...")
                 pull_model_blocking(EXTRACTION_MODEL, log)
