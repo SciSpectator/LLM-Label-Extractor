@@ -377,18 +377,23 @@ RESPOND WITH ONLY THE CLUSTER NAME.</div>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════ -->
-<h2>9. Output Files</h2>
+<h2>9. Output Structure</h2>
 
 <div class="card">
-<table>
-<tr><th>File</th><th>Phase</th><th>Content</th></tr>
-<tr><td><code>labels_raw.csv</code></td><td>Phase 1</td><td>Raw extraction (before NS inference)</td></tr>
-<tr><td><code>labels_phase1b_1c.csv</code></td><td>Phase 1b+1c</td><td>After NS inference + full re-extraction</td></tr>
-<tr><td><code>labels_final.csv</code></td><td>Phase 2</td><td>Final normalized labels (canonical clusters)</td></tr>
-<tr><td><code>full_repaired.csv</code></td><td>All</td><td>Complete platform with labels merged</td></tr>
-<tr><td><code>NS_repaired.csv</code></td><td>All</td><td>Audit trail: before/after per sample</td></tr>
-<tr><td><code>checkpoints/</code></td><td>All</td><td>Phase 1 JSON + Phase 2 CSV checkpoints</td></tr>
-</table>
+<div class="prompt">{PlatformID}_llm_extraction_results/
+├── Phase1_results/
+│   ├── labels_phase1.csv          # gsm, series_id, Tissue, Condition, Treatment (raw extraction)
+│   └── labels_phase1b.csv         # gsm, series_id, Tissue, Condition, Treatment (after NS inference)
+├── Phase2_results/
+│   ├── labels_collapsed.csv       # gsm, series_id, Tissue, Condition, Treatment (normalized to clusters)
+│   └── collapse_audit.csv         # before/after per sample with fields_fixed count
+├── Final_results/
+│   ├── labels.csv                 # gsm, series_id, Tissue, Condition, Treatment (CLEAN — use this)
+│   └── full_platform.csv          # complete platform with all original columns + labels
+└── checkpoints/
+    ├── phase1_only_extracted.json # Phase 1 snapshot (before Phase 1b)
+    └── phase1_extracted.json      # Phase 1+1b+1c combined checkpoint</div>
+<p style="color:var(--text2);font-size:.85em;margin-top:8px"><code>Final_results/labels.csv</code> is the primary output — simple columns: gsm, series_id, Tissue, Condition, Treatment.</p>
 </div>
 
 <p style="text-align:center;color:var(--text2);margin-top:50px;font-size:.85em">

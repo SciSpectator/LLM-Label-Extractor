@@ -259,10 +259,10 @@ def main():
 
     # ── Check completions ──
     def _is_complete(gpl):
-        rd = os.path.join(HARMONIZED, f"{gpl}_NS_repaired_final_results")
+        rd = os.path.join(HARMONIZED, f"{gpl}_llm_extraction_results")
         if SKIP_PHASE2:
-            return os.path.isfile(os.path.join(rd, "labels_phase1b_1c.csv"))
-        return os.path.isfile(os.path.join(rd, "labels_final.csv"))
+            return os.path.isfile(os.path.join(rd, "Phase1_results", "labels_phase1b.csv"))
+        return os.path.isfile(os.path.join(rd, "Final_results", "labels.csv"))
 
     remaining = [p for p in filtered if not _is_complete(p["gpl"])]
     skipped = len(filtered) - len(remaining)

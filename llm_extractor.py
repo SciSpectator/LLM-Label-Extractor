@@ -5251,7 +5251,7 @@ def pipeline(config: dict, q: queue.Queue):
             # Scan ALL existing subset dirs (not just contiguous) via glob
             import glob as _glob
             _existing = sorted(
-                _glob.glob(os.path.join(harmonized_dir, "GSM_subset_*_NS_repaired_final_results")))
+                _glob.glob(os.path.join(harmonized_dir, "GSM_subset_*_llm_extraction_results")))
             _resume_idx = None
             _max_idx = 0
             for _ed in _existing:
@@ -5271,9 +5271,12 @@ def pipeline(config: dict, q: queue.Queue):
             else:
                 _subset_idx = _max_idx + 1
             run_dir  = os.path.join(harmonized_dir,
-                         f"GSM_subset_{_subset_idx}_NS_repaired_final_results")
+                         f"GSM_subset_{_subset_idx}_llm_extraction_results")
             ckpt_dir = os.path.join(run_dir, "checkpoints")
-            for _d in (run_dir, ckpt_dir):
+            _phase1_dir = os.path.join(run_dir, "Phase1_results")
+            _phase2_dir = os.path.join(run_dir, "Phase2_results")
+            _final_dir  = os.path.join(run_dir, "Final_results")
+            for _d in (run_dir, ckpt_dir, _phase1_dir, _phase2_dir, _final_dir):
                 os.makedirs(_d, exist_ok=True)
             log(f"\n📁 Results folder: {run_dir}")
             log(f"📂 Loading GSM list from {os.path.basename(gsm_list_file)} …")
@@ -5292,9 +5295,12 @@ def pipeline(config: dict, q: queue.Queue):
             _cols = LABEL_COLS_SCRATCH
             scratch_mode = True
             run_dir  = os.path.join(harmonized_dir,
-                                     f"{platform_id}_NS_repaired_final_results")
+                                     f"{platform_id}_llm_extraction_results")
             ckpt_dir = os.path.join(run_dir, "checkpoints")
-            for _d in (run_dir, ckpt_dir):
+            _phase1_dir = os.path.join(run_dir, "Phase1_results")
+            _phase2_dir = os.path.join(run_dir, "Phase2_results")
+            _final_dir  = os.path.join(run_dir, "Final_results")
+            for _d in (run_dir, ckpt_dir, _phase1_dir, _phase2_dir, _final_dir):
                 os.makedirs(_d, exist_ok=True)
             if multi_mode:
                 _midx = config.get("_multi_idx", "?")
@@ -5324,9 +5330,12 @@ def pipeline(config: dict, q: queue.Queue):
             #  Mode A: harmonized CSV files (standard mode)
             # Create run_dir here — only for repair mode, not scratch mode
             run_dir  = os.path.join(harmonized_dir,
-                                     f"{platform_id}_NS_repaired_final_results")
+                                     f"{platform_id}_llm_extraction_results")
             ckpt_dir = os.path.join(run_dir, "checkpoints")
-            for _d in (run_dir, ckpt_dir):
+            _phase1_dir = os.path.join(run_dir, "Phase1_results")
+            _phase2_dir = os.path.join(run_dir, "Phase2_results")
+            _final_dir  = os.path.join(run_dir, "Final_results")
+            for _d in (run_dir, ckpt_dir, _phase1_dir, _phase2_dir, _final_dir):
                 os.makedirs(_d, exist_ok=True)
             log(f"\n📁 Results folder: {run_dir}")
             log("📂 Loading harmonized label files …")
@@ -6180,14 +6189,15 @@ def pipeline(config: dict, q: queue.Queue):
                 import json as _json2
                 _p1_only = os.path.join(run_dir, "checkpoints", "phase1_only_extracted.json")
                 _p1_combined = os.path.join(run_dir, "checkpoints", "phase1_extracted.json")
-                for src, name in [(_p1_only, "labels_raw.csv"), (_p1_combined, "labels_phase1b_1c.csv")]:
+                for src, name in [(_p1_only, "labels_phase1.csv"), (_p1_combined, "labels_phase1b.csv")]:
                     if os.path.isfile(src):
                         with open(src) as _f:
                             _data = _json2.load(_f)
                         _rows = [{"gsm": g, "series_id": _gsm2gse.get(g, ""),
                                   **{c: _data.get(g, {}).get(c, NS) for c in _cols}} for g in _data]
-                        pd.DataFrame(_rows).to_csv(os.path.join(run_dir, name), index=False)
-                        log(f"  Saved {name} ({len(_rows):,} rows)")
+                        _out_path = os.path.join(_phase1_dir, name)
+                        pd.DataFrame(_rows).to_csv(_out_path, index=False)
+                        log(f"  Saved Phase1_results/{name} ({len(_rows):,} rows)")
                 q.put({"type": "done", "success": True})
                 return
 
@@ -6634,22 +6644,16 @@ def pipeline(config: dict, q: queue.Queue):
             before_df.to_csv(before_path, index=False)
             log(f"\n labels_before.csv      {len(before_df):,} rows  (input labels)")
 
-            # --- labels_final.csv  (after all collapse/repair phases) ---
-            final_df = res_df[["gsm", "series_id"]].copy()
-            for c in _cols:
-                final_df[c] = res_df.get(f"{c}_after", NS)
-            final_path = os.path.join(run_dir, "labels_final.csv")
-            final_df.to_csv(final_path, index=False)
-            n_resolved = {c: (final_df[c] != NS).sum() for c in _cols}
-            log(f" labels_final.csv      {len(final_df):,} rows  "
-                f"(resolved: {', '.join(f'{c}={n_resolved[c]}' for c in _cols)})")
+            # ═══════════════════════════════════════════════════════════
+            #  Save outputs to Phase1_results / Phase2_results / Final_results
+            # ═══════════════════════════════════════════════════════════
 
-            # --- labels_raw.csv / labels_phase1.csv  (Phase 1 extraction only) ---
             import json as _json
             _p1_only_path = os.path.join(run_dir, "checkpoints", "phase1_only_extracted.json")
             _ckpt_path = os.path.join(run_dir, "checkpoints", "phase1_extracted.json")
 
-            # Phase 1 only (before Phase 1b inference)
+            # ── Phase1_results ──
+            # labels_raw.csv (Phase 1 only)
             _p1_src = _p1_only_path if os.path.isfile(_p1_only_path) else _ckpt_path
             if os.path.isfile(_p1_src):
                 with open(_p1_src) as _f:
@@ -6657,26 +6661,41 @@ def pipeline(config: dict, q: queue.Queue):
                 raw_df = res_df[["gsm", "series_id"]].copy()
                 for c in _cols:
                     raw_df[c] = raw_df["gsm"].map(lambda g, _c=c: _p1_data.get(g, {}).get(_c, NS))
-                _tag = "Phase 1 only" if _p1_src == _p1_only_path else "Phase 1+1b (no P1-only snapshot)"
-                log(f" labels_raw.csv        {len(raw_df):,} rows  ({_tag})")
-            else:
-                raw_df = final_df.copy()
-                log(f" labels_raw.csv        {len(raw_df):,} rows  (no checkpoint — copy of final)")
-            raw_path = os.path.join(run_dir, "labels_raw.csv")
-            raw_df.to_csv(raw_path, index=False)
-
-            # Phase 1b (after NS inference, before collapse)
+                raw_df.to_csv(os.path.join(_phase1_dir, "labels_phase1.csv"), index=False)
+                log(f"\n Phase1_results/labels_phase1.csv  {len(raw_df):,} rows")
+            # labels_phase1b.csv (Phase 1 + 1b)
             if os.path.isfile(_ckpt_path):
                 with open(_ckpt_path) as _f:
                     _p1b_data = _json.load(_f)
                 p1b_df = res_df[["gsm", "series_id"]].copy()
                 for c in _cols:
                     p1b_df[c] = p1b_df["gsm"].map(lambda g, _c=c: _p1b_data.get(g, {}).get(_c, NS))
-                p1b_path = os.path.join(run_dir, "labels_phase1b.csv")
-                p1b_df.to_csv(p1b_path, index=False)
-                log(f" labels_phase1b.csv    {len(p1b_df):,} rows  (Phase 1 + 1b, before collapse)")
+                p1b_df.to_csv(os.path.join(_phase1_dir, "labels_phase1b.csv"), index=False)
+                log(f" Phase1_results/labels_phase1b.csv {len(p1b_df):,} rows")
 
-            # --- full_repaired.csv  (complete platform with labels merged) ---
+            # ── Phase2_results ──
+            # labels_collapsed.csv (after collapse)
+            final_df = res_df[["gsm", "series_id"]].copy()
+            for c in _cols:
+                final_df[c] = res_df.get(f"{c}_after", NS)
+            final_df.to_csv(os.path.join(_phase2_dir, "labels_collapsed.csv"), index=False)
+            n_resolved = {c: (final_df[c] != NS).sum() for c in _cols}
+            log(f" Phase2_results/labels_collapsed.csv {len(final_df):,} rows  "
+                f"(resolved: {', '.join(f'{c}={n_resolved[c]}' for c in _cols)})")
+            # audit trail
+            audit_cols = ["gsm", "series_id"] + \
+                sum([[f"{c}_before", f"{c}_after"] for c in _cols], []) + \
+                ["fields_fixed"]
+            res_df[[c for c in audit_cols if c in res_df.columns]].to_csv(
+                os.path.join(_phase2_dir, "collapse_audit.csv"), index=False)
+            log(f" Phase2_results/collapse_audit.csv   {len(res_df):,} rows")
+
+            # ── Final_results ──
+            # Clean simple CSV: gsm, series_id, Tissue, Condition, Treatment
+            final_clean = final_df[["gsm", "series_id"] + list(_cols)].copy()
+            final_clean.to_csv(os.path.join(_final_dir, "labels.csv"), index=False)
+            log(f" Final_results/labels.csv            {len(final_clean):,} rows  (clean output)")
+            # Full platform with labels merged
             full_df = target.copy()
             _tmp = res_df.dropna(subset=["gsm"]).set_index("gsm")
             for col in _cols:
@@ -6686,25 +6705,16 @@ def pipeline(config: dict, q: queue.Queue):
                 if _after_col in _tmp.columns:
                     _map = _tmp[_after_col].to_dict()
                     full_df[col] = full_df["gsm"].map(_map).fillna(full_df[col])
-            full_path = os.path.join(run_dir, "full_repaired.csv")
-            full_df.to_csv(full_path, index=False)
-            log(f" full_repaired.csv     {len(full_df):,} rows  (full platform)")
-
-            # --- NS_repaired.csv  (audit trail: before + after + fields_fixed) ---
-            audit_cols = ["gsm", "series_id"] + \
-                sum([[f"{c}_before", f"{c}_after"] for c in _cols], []) + \
-                ["fields_fixed"]
-            ns_path = os.path.join(run_dir, "NS_repaired.csv")
-            res_df[[c for c in audit_cols if c in res_df.columns]].to_csv(
-                ns_path, index=False)
-            log(f" NS_repaired.csv      {len(res_df):,} rows  (audit trail)")
+            full_df.to_csv(os.path.join(_final_dir, "full_platform.csv"), index=False)
+            log(f" Final_results/full_platform.csv     {len(full_df):,} rows")
 
         else:
             log("[WARN] No results to save")
-            for fname in ("labels_before.csv", "labels_final.csv",
-                          "labels_raw.csv", "full_repaired.csv", "NS_repaired.csv"):
+            for subdir, fname in [(_phase1_dir, "labels_phase1.csv"),
+                                   (_phase2_dir, "labels_collapsed.csv"),
+                                   (_final_dir, "labels.csv")]:
                 pd.DataFrame(columns=_out_cols).to_csv(
-                    os.path.join(run_dir, fname), index=False)
+                    os.path.join(subdir, fname), index=False)
 
         # ── Novel label check ──
         log(f"\n Checking for novel labels (not in original vocabulary) ")
@@ -7588,12 +7598,12 @@ class App(tk.Tk):
         input_dir  = self._var_dir.get().strip()
         platform   = self._var_platform.get().strip()
         # Look for both naming conventions
-        run_dir = os.path.join(input_dir, f"{platform}_NS_repaired_final_results")
+        run_dir = os.path.join(input_dir, f"{platform}_llm_extraction_results")
         if not os.path.isdir(run_dir):
             # Try scratch subset dirs
             _candidates = sorted([
                 d for d in os.listdir(input_dir)
-                if d.startswith("GSM_subset_") and d.endswith("_NS_repaired_final_results")
+                if d.startswith("GSM_subset_") and d.endswith("_llm_extraction_results")
                 and os.path.isdir(os.path.join(input_dir, d))],
                 reverse=True)  # newest = highest index
             if _candidates:
@@ -7601,7 +7611,7 @@ class App(tk.Tk):
 
         if not os.path.isdir(run_dir):
             messagebox.showerror("Not found",
-                f"{platform}_NS_repaired_final_results not found in:\n{input_dir}\n\n"
+                f"{platform}_llm_extraction_results not found in:\n{input_dir}\n\n"
                 "Run the pipeline first."); return
 
         # Find most recent run folder for this platform
@@ -7708,17 +7718,17 @@ class App(tk.Tk):
         """Return path to the most recent results folder, or '' if not found."""
         d   = self._var_dir.get().strip()
         gpl = self._var_platform.get().strip()
-        # Repair mode: GPL570_NS_repaired_final_results
-        root = os.path.join(d, f"{gpl}_NS_repaired_final_results")
+        # Repair mode: GPL570_llm_extraction_results
+        root = os.path.join(d, f"{gpl}_llm_extraction_results")
         if os.path.isdir(root) and os.path.isfile(
                 os.path.join(root, "NS_repaired.csv")):
             return root
-        # Scratch mode: GSM_subset_{N}_NS_repaired_final_results  pick highest N
+        # Scratch mode: GSM_subset_{N}_llm_extraction_results  pick highest N
         if os.path.isdir(d):
             candidates = sorted([
                 os.path.join(d, x) for x in os.listdir(d)
                 if x.startswith("GSM_subset_") and
-                   x.endswith("_NS_repaired_final_results") and
+                   x.endswith("_llm_extraction_results") and
                    os.path.isfile(os.path.join(d, x, "NS_repaired.csv"))],
                 key=lambda p: int(p.split("_subset_")[1].split("_NS")[0])
                     if "_subset_" in p else 0, reverse=True)
