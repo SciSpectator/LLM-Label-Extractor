@@ -261,8 +261,8 @@ def main():
     def _is_complete(gpl):
         rd = os.path.join(HARMONIZED, f"{gpl}_llm_extraction_results")
         if SKIP_PHASE2:
-            return os.path.isfile(os.path.join(rd, "Phase1_results", "labels_phase1b.csv"))
-        return os.path.isfile(os.path.join(rd, "Final_results", "labels.csv"))
+            return os.path.isfile(os.path.join(rd, "Phase1_results", f"{gpl}_phase1b_labels.csv"))
+        return os.path.isfile(os.path.join(rd, "Final_results", f"{gpl}_final_labels.csv"))
 
     remaining = [p for p in filtered if not _is_complete(p["gpl"])]
     skipped = len(filtered) - len(remaining)

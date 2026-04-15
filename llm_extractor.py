@@ -6189,7 +6189,8 @@ def pipeline(config: dict, q: queue.Queue):
                 import json as _json2
                 _p1_only = os.path.join(run_dir, "checkpoints", "phase1_only_extracted.json")
                 _p1_combined = os.path.join(run_dir, "checkpoints", "phase1_extracted.json")
-                for src, name in [(_p1_only, "labels_phase1.csv"), (_p1_combined, "labels_phase1b.csv")]:
+                for src, name in [(_p1_only, f"{platform_id}_phase1_labels.csv"),
+                                   (_p1_combined, f"{platform_id}_phase1b_labels.csv")]:
                     if os.path.isfile(src):
                         with open(src) as _f:
                             _data = _json2.load(_f)
@@ -6653,7 +6654,6 @@ def pipeline(config: dict, q: queue.Queue):
             _ckpt_path = os.path.join(run_dir, "checkpoints", "phase1_extracted.json")
 
             # ── Phase1_results ──
-            # labels_raw.csv (Phase 1 only)
             _p1_src = _p1_only_path if os.path.isfile(_p1_only_path) else _ckpt_path
             if os.path.isfile(_p1_src):
                 with open(_p1_src) as _f:
@@ -6661,40 +6661,33 @@ def pipeline(config: dict, q: queue.Queue):
                 raw_df = res_df[["gsm", "series_id"]].copy()
                 for c in _cols:
                     raw_df[c] = raw_df["gsm"].map(lambda g, _c=c: _p1_data.get(g, {}).get(_c, NS))
-                raw_df.to_csv(os.path.join(_phase1_dir, "labels_phase1.csv"), index=False)
-                log(f"\n Phase1_results/labels_phase1.csv  {len(raw_df):,} rows")
-            # labels_phase1b.csv (Phase 1 + 1b)
+                raw_df.to_csv(os.path.join(_phase1_dir, f"{platform_id}_phase1_labels.csv"), index=False)
+                log(f"\n Phase1_results/{platform_id}_phase1_labels.csv  {len(raw_df):,} rows")
             if os.path.isfile(_ckpt_path):
                 with open(_ckpt_path) as _f:
                     _p1b_data = _json.load(_f)
                 p1b_df = res_df[["gsm", "series_id"]].copy()
                 for c in _cols:
                     p1b_df[c] = p1b_df["gsm"].map(lambda g, _c=c: _p1b_data.get(g, {}).get(_c, NS))
-                p1b_df.to_csv(os.path.join(_phase1_dir, "labels_phase1b.csv"), index=False)
-                log(f" Phase1_results/labels_phase1b.csv {len(p1b_df):,} rows")
+                p1b_df.to_csv(os.path.join(_phase1_dir, f"{platform_id}_phase1b_labels.csv"), index=False)
+                log(f" Phase1_results/{platform_id}_phase1b_labels.csv {len(p1b_df):,} rows")
 
-            # ── Phase2_results ──
-            # labels_collapsed.csv (after collapse)
+            # ── Final_results (after collapse — the last step) ──
             final_df = res_df[["gsm", "series_id"]].copy()
             for c in _cols:
                 final_df[c] = res_df.get(f"{c}_after", NS)
-            final_df.to_csv(os.path.join(_phase2_dir, "labels_collapsed.csv"), index=False)
             n_resolved = {c: (final_df[c] != NS).sum() for c in _cols}
-            log(f" Phase2_results/labels_collapsed.csv {len(final_df):,} rows  "
+            # Clean output: gsm, series_id, Tissue, Condition, Treatment
+            final_df.to_csv(os.path.join(_final_dir, f"{platform_id}_final_labels.csv"), index=False)
+            log(f"\n Final_results/{platform_id}_final_labels.csv  {len(final_df):,} rows  "
                 f"(resolved: {', '.join(f'{c}={n_resolved[c]}' for c in _cols)})")
-            # audit trail
+            # Audit trail
             audit_cols = ["gsm", "series_id"] + \
                 sum([[f"{c}_before", f"{c}_after"] for c in _cols], []) + \
                 ["fields_fixed"]
             res_df[[c for c in audit_cols if c in res_df.columns]].to_csv(
-                os.path.join(_phase2_dir, "collapse_audit.csv"), index=False)
-            log(f" Phase2_results/collapse_audit.csv   {len(res_df):,} rows")
-
-            # ── Final_results ──
-            # Clean simple CSV: gsm, series_id, Tissue, Condition, Treatment
-            final_clean = final_df[["gsm", "series_id"] + list(_cols)].copy()
-            final_clean.to_csv(os.path.join(_final_dir, "labels.csv"), index=False)
-            log(f" Final_results/labels.csv            {len(final_clean):,} rows  (clean output)")
+                os.path.join(_final_dir, f"{platform_id}_collapse_audit.csv"), index=False)
+            log(f" Final_results/{platform_id}_collapse_audit.csv   {len(res_df):,} rows")
             # Full platform with labels merged
             full_df = target.copy()
             _tmp = res_df.dropna(subset=["gsm"]).set_index("gsm")
@@ -6705,14 +6698,13 @@ def pipeline(config: dict, q: queue.Queue):
                 if _after_col in _tmp.columns:
                     _map = _tmp[_after_col].to_dict()
                     full_df[col] = full_df["gsm"].map(_map).fillna(full_df[col])
-            full_df.to_csv(os.path.join(_final_dir, "full_platform.csv"), index=False)
-            log(f" Final_results/full_platform.csv     {len(full_df):,} rows")
+            full_df.to_csv(os.path.join(_final_dir, f"{platform_id}_full_platform.csv"), index=False)
+            log(f" Final_results/{platform_id}_full_platform.csv     {len(full_df):,} rows")
 
         else:
             log("[WARN] No results to save")
-            for subdir, fname in [(_phase1_dir, "labels_phase1.csv"),
-                                   (_phase2_dir, "labels_collapsed.csv"),
-                                   (_final_dir, "labels.csv")]:
+            for subdir, fname in [(_phase1_dir, f"{platform_id}_phase1_labels.csv"),
+                                   (_final_dir, f"{platform_id}_final_labels.csv")]:
                 pd.DataFrame(columns=_out_cols).to_csv(
                     os.path.join(subdir, fname), index=False)
 

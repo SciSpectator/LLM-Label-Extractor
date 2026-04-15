@@ -382,18 +382,16 @@ RESPOND WITH ONLY THE CLUSTER NAME.</div>
 <div class="card">
 <div class="prompt">{PlatformID}_llm_extraction_results/
 ├── Phase1_results/
-│   ├── labels_phase1.csv          # gsm, series_id, Tissue, Condition, Treatment (raw extraction)
-│   └── labels_phase1b.csv         # gsm, series_id, Tissue, Condition, Treatment (after NS inference)
-├── Phase2_results/
-│   ├── labels_collapsed.csv       # gsm, series_id, Tissue, Condition, Treatment (normalized to clusters)
-│   └── collapse_audit.csv         # before/after per sample with fields_fixed count
+│   ├── {PlatformID}_phase1_labels.csv     # raw extraction (Phase 1 only)
+│   └── {PlatformID}_phase1b_labels.csv    # after NS inference (Phase 1+1b+1c)
 ├── Final_results/
-│   ├── labels.csv                 # gsm, series_id, Tissue, Condition, Treatment (CLEAN — use this)
-│   └── full_platform.csv          # complete platform with all original columns + labels
+│   ├── {PlatformID}_final_labels.csv      # normalized to canonical clusters (USE THIS)
+│   ├── {PlatformID}_collapse_audit.csv    # before/after audit trail
+│   └── {PlatformID}_full_platform.csv     # complete platform with all columns + labels
 └── checkpoints/
-    ├── phase1_only_extracted.json # Phase 1 snapshot (before Phase 1b)
-    └── phase1_extracted.json      # Phase 1+1b+1c combined checkpoint</div>
-<p style="color:var(--text2);font-size:.85em;margin-top:8px"><code>Final_results/labels.csv</code> is the primary output — simple columns: gsm, series_id, Tissue, Condition, Treatment.</p>
+    ├── phase1_only_extracted.json          # Phase 1 snapshot (before Phase 1b)
+    └── phase1_extracted.json               # Phase 1+1b+1c combined checkpoint</div>
+<p style="color:var(--text2);font-size:.85em;margin-top:8px"><code>Final_results/{PlatformID}_final_labels.csv</code> is the primary output — columns: gsm, series_id, Tissue, Condition, Treatment.</p>
 </div>
 
 <p style="text-align:center;color:var(--text2);margin-top:50px;font-size:.85em">
