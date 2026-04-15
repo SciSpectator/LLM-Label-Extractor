@@ -2575,11 +2575,11 @@ class GSEContext:
 
 # 
 #  PROMPT BUILDERS    short, direct, gemma4:e2b-friendly
-#  Rule: keep total prompt under ~600 tokens so num_ctx=2048 is always safe
+#  Sanitize metadata text (strip control chars, no char limits)
 # 
-def _sanitize(text, max_chars: int = 400) -> str:
+def _sanitize(text) -> str:
     text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', ' ', str(text or ""))
-    return text.replace('\r', ' ').strip()[:max_chars]
+    return text.replace('\r', ' ').strip()
 
 
 
