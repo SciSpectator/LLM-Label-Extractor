@@ -100,7 +100,21 @@ _TISSUE_EXTRACT_PROMPT = (
     "Read ALL fields (Title, Source, Characteristics, Description, Experiment).\n"
     "Priority: Cell Line > Cell Type > Tissue. Most specific term.\n"
     "Tumor samples → extract the TISSUE (breast tumor → Breast).\n"
-    "If MULTIPLE tissues → list ALL separated by semicolon.\n"
+    "\n"
+    "FIELD SCOPE — extract tissue ONLY from fields whose NAME is one of:\n"
+    "  tissue, source, organ, organ part, region, anatomical site, body site,\n"
+    "  cell type, cell line, brain region, biopsy site, sample type.\n"
+    "IGNORE tissue-sounding words that appear inside fields named:\n"
+    "  diagnosis, cause of death, comorbidity, comorbidities, medical history,\n"
+    "  past medical history, secondary diagnosis, secondary disease,\n"
+    "  other disease, clinical notes, family history.\n"
+    "Cancer names, organ names, or disease sites inside THOSE fields describe\n"
+    "the patient's CONDITION, not the tissue this sample was taken from.\n"
+    "\n"
+    "If MULTIPLE tissues → list ALL separated by semicolon, BUT only when a\n"
+    "single sample genuinely spans multiple anatomical sites (e.g. tumor +\n"
+    "adjacent normal from the same biopsy). Never list every organ mentioned\n"
+    "anywhere in the record.\n"
     "If absent → Not Specified. Title Case.\n"
     "METADATA:\n  Title: {TITLE}\n  Source: {SOURCE}\n  Characteristics: {CHAR}\n"
     "ANSWER:"
@@ -150,20 +164,6 @@ _PER_LABEL_EXTRACT_PROMPTS = {
     "Treatment": _TREATMENT_EXTRACT_PROMPT,
 }
 
-# System prompts kept for Phase 1c (full re-extraction) and collapse agent
-_PER_LABEL_SYSTEM_PROMPTS = {
-    "Tissue":    _TISSUE_EXTRACT_PROMPT.split("METADATA:")[0],
-    "Condition": _CONDITION_EXTRACT_PROMPT.split("METADATA:")[0],
-    "Treatment": _TREATMENT_EXTRACT_PROMPT.split("METADATA:")[0],
-}
-
-# User prompt template for Phase 1c (system+user split for full metadata)
-_EXTRACT_USER_TEMPLATE = (
-    "Title: {TITLE}\n"
-    "Source: {SOURCE}\n"
-    "Characteristics: {CHAR}"
-)
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PER-LABEL NS INFERENCE PROMPTS  (gemma4:e2b, Phase 1b)
 # Each label has its OWN GSE-context inference agent.
@@ -190,7 +190,23 @@ _CONDITION_INFER_SYSTEM = (
     "If the experiment studies a disease, this sample has that condition.\n"
     "Control/healthy in disease study = Control.\n"
     "Be specific. Unknown = Not Specified.\n"
-    "If MULTIPLE conditions → list ALL separated by semicolon."
+    "\n"
+    "SCOPE RULE — GSE vs SAMPLE:\n"
+    "The GSE often COMPARES multiple diseases (e.g. PSP vs FTD, disease A vs\n"
+    "disease B vs control). Each individual sample has ONLY ONE of them —\n"
+    "NEVER all of them. Do NOT copy the list of diseases from the experiment\n"
+    "summary onto every sample.\n"
+    "Use the sample's Title / Source / Characteristics to decide WHICH\n"
+    "disease THIS sample has. Group labels embedded in the title\n"
+    "(e.g. 'PSP_brain_03', 'FTD_case_12', 'case_AD_07') are the strongest\n"
+    "signal — trust them.\n"
+    "If the sample text gives NO disease signal and the GSE studies several\n"
+    "distinct diseases → Not Specified. Do NOT default to the full list.\n"
+    "\n"
+    "MULTIPLE CONDITIONS — only output a semicolon-separated list when ONE\n"
+    "sample genuinely has documented comorbidities in its OWN Characteristics\n"
+    "(e.g. 'MS + chronic UTI + hypertension' recorded for that same sample).\n"
+    "A GSE that studies two separate disease cohorts is NOT a comorbidity."
 )
 _TREATMENT_INFER_SYSTEM = (
     "You are a treatment/drug annotator. This sample is part of "
@@ -2944,7 +2960,7 @@ class CollapseWorker:
     - GSE context (title, summary) injected into LLM prompt so the agent
       understands the experiment when disambiguating.
 
-    Model: gemma4:e2b (think=false, ~700ms first encounter, <1ms repeats)
+    Model: gemma4:e2b (think=True for reasoning, ~1.5-2s first encounter, <1ms on cache hits)
     """
 
     # Garbage patterns to filter from LLM output
@@ -3088,9 +3104,15 @@ class CollapseWorker:
                     {"role": "system", "content": self._build_system_prompt()},
                     {"role": "user", "content": user_msg}
                 ],
-                "options": {"temperature": 0, "num_predict": 30, "num_ctx": 2048},
-                "think": False,
-            }, timeout=30)
+                # think=True for Phase 2 — reasoning prevents collapse of
+                # Non-X into the X cluster (e.g. "Non Smoker" → Control, not Smoking).
+                # Phase 1/1b stay on think=False for speed.
+                # num_predict bumped: thinking tokens count against the budget,
+                # so 30 is too small (model uses it all on reasoning, no tokens
+                # left for the answer → llm_fallback).
+                "options": {"temperature": 0, "num_predict": 512, "num_ctx": 4096},
+                "think": True,
+            }, timeout=120)
             resp.raise_for_status()
             return resp.json().get("message", {}).get("content", "").strip()
         except Exception:
@@ -4039,8 +4061,8 @@ def pipeline(config: dict, q: queue.Queue):
     def log(msg):           q.put({"type": "log",      "msg":  msg})
     def prog(pct, label=""): q.put({"type": "progress", "pct":  pct, "label": label})
 
-    # Stop event used by Phase 1c (and re-used by Phase 2) — must exist before
-    # Phase 1c references it; Phase 2 setup at line ~5098 re-assigns harmlessly.
+    # Stop event used by Phase 2 — must exist before reference;
+    # Phase 2 setup re-assigns harmlessly.
     stop_evt = threading.Event()
 
     server_proc = None
@@ -4677,6 +4699,8 @@ def pipeline(config: dict, q: queue.Queue):
                     _gse_ctx += f"Experiment: {_gse_info['title']}\n"
                 if _gse_info.get("summary"):
                     _gse_ctx += f"Summary: {_gse_info['summary']}\n"
+                if _gse_info.get("overall_design"):
+                    _gse_ctx += f"Design: {_gse_info['overall_design']}\n"
 
                 def _call_one_label(col_):
                     """One LLM call for one label — inline prompt (fast, no KV cache thrash)."""
@@ -4686,6 +4710,8 @@ def pipeline(config: dict, q: queue.Queue):
                         .replace("{CHAR}", _char))
                     if _desc:
                         prompt_ += f"\nDescription: {_desc}"
+                    if _treat:
+                        prompt_ += f"\nProtocol: {_treat}"
                     if _gse_ctx:
                         prompt_ += f"\n{_gse_ctx}"
                     text_ = ""
@@ -4900,129 +4926,9 @@ def pipeline(config: dict, q: queue.Queue):
                 except Exception:
                     pass
 
-            #  Phase 1c: Full-metadata re-extraction for remaining NS fields
-            # Samples STILL NS after Phase 1+1b are re-processed with NO char limits
-            # on Description and Summary — ensures no information loss.
-            _skip_p1c = config.get("skip_phase1c", False)
-            _ns_after_all = [(gsm_, labs_) for gsm_, labs_ in phase1_extracted.items()
-                             if any(is_ns(labs_.get(c, NS)) for c in _cols)]
-            if _skip_p1c:
-                if _ns_after_all:
-                    log(f"\n⏭️  Phase 1c skipped (skip_phase1c=True) — {len(_ns_after_all):,} NS samples unchanged")
-            elif _ns_after_all:
-                log(f"\n🔬 Phase 1c: Full-metadata re-extraction for {len(_ns_after_all):,} "
-                    f"samples still with NS fields …")
-                log(f"  No character limits on Description/Summary — full metadata scan")
-                prog(35, f"Phase 1c: full re-extraction ({len(_ns_after_all):,} NS samples)")
-                _p1c_resolved = [0]
-
-                def _p1c_extract(args):
-                    gsm_, labs_ = args
-                    if stop_evt.is_set():
-                        return
-                    raw_ = raw_map.get(gsm_, {})
-                    # Get GSE for this GSM
-                    gse_ = ""
-                    try:
-                        gse_ = gsm_to_gse_map.get(gsm_, "")
-                    except NameError:
-                        pass
-                    if not gse_:
-                        gse_ = str(raw_.get("series_id", ""))
-                    if not gse_:
-                        _t = target[target["gsm"] == gsm_]
-                        if len(_t) > 0:
-                            gse_ = str(_t.iloc[0].get("series_id", ""))
-                    worker_ = _p1_workers.get(gse_) or GSEWorker(
-                        gse_, GSEContext(gse_), model, ollama_url,
-                        watchdog, mem_agent=mem_agent, platform=platform_id)
-
-                    # Full metadata — ZERO truncation, complete information
-                    _title = str(raw_.get("gsm_title", "")).strip()
-                    _source = str(raw_.get("source_name", "")).strip()
-                    _char = str(raw_.get("characteristics", "")).replace("\t", " ").strip()
-                    _desc = str(raw_.get("description", "")).replace("\t", " ").strip()
-                    _treat_proto = str(raw_.get("treatment_protocol", "")).replace("\t", " ").strip()
-                    _gse_info = gse_meta.get(gse_, {})
-                    _gse_ctx = ""
-                    if _gse_info.get("title"):
-                        _gse_ctx += f"Experiment: {_gse_info['title']}\n"
-                    if _gse_info.get("summary"):
-                        _gse_ctx += f"Summary: {_gse_info['summary']}\n"
-                    if _gse_info.get("overall_design"):
-                        _gse_ctx += f"Design: {_gse_info['overall_design']}\n"
-
-                    # Only re-extract NS columns
-                    ns_cols_ = [c for c in _cols if is_ns(labs_.get(c, NS))]
-                    for col_ in ns_cols_:
-                        sys_prompt_ = _PER_LABEL_SYSTEM_PROMPTS[col_]
-                        user_ = (_EXTRACT_USER_TEMPLATE
-                            .replace("{TITLE}", _title)
-                            .replace("{SOURCE}", _source)
-                            .replace("{CHAR}", _char))
-                        if _desc:
-                            user_ += f"\nDescription: {_desc}"
-                        if _treat_proto:
-                            user_ += f"\nTreatment Protocol: {_treat_proto}"
-                        if _gse_ctx:
-                            user_ += f"\n{_gse_ctx}"
-
-                        # Phase 1c uses larger context window for full metadata
-                        text_ = ""
-                        for _attempt in range(3):
-                            try:
-                                messages = [{"role": "system", "content": sys_prompt_},
-                                            {"role": "user", "content": user_}]
-                                resp = requests.post(
-                                    ollama_url.rstrip("/") + "/api/chat",
-                                    json={"model": EXTRACTION_MODEL, "messages": messages,
-                                          "options": {"temperature": 0.0, "num_predict": 60,
-                                                      "num_ctx": 4096},
-                                          "think": False, "stream": False, "keep_alive": -1},
-                                    timeout=60)
-                                if resp.status_code == 200:
-                                    text_ = resp.json().get("message", {}).get("content", "").strip()
-                            except Exception:
-                                pass
-                            if text_:
-                                break
-                            time.sleep(2)
-                        answer_ = _parse_single_label(text_)
-                        if answer_ and not is_ns(answer_):
-                            labs_[col_] = answer_
-                            _p1c_resolved[0] += 1
-
-                    phase1_extracted[gsm_] = labs_
-
-                # Process sequentially (these are the hard cases)
-                for i, args in enumerate(_ns_after_all):
-                    if stop_evt.is_set():
-                        break
-                    _throttle_sem.acquire()
-                    try:
-                        _p1c_extract(args)
-                    finally:
-                        _throttle_sem.release()
-                    if (i + 1) % 100 == 0:
-                        log(f"  Phase 1c: {i+1}/{len(_ns_after_all)} "
-                            f"| resolved {_p1c_resolved[0]} fields")
-
-                log(f"  Phase 1c complete — {_p1c_resolved[0]} additional fields resolved "
-                    f"from full metadata")
-                for c in _cols:
-                    _ns_c = sum(1 for labs in phase1_extracted.values() if is_ns(labs.get(c, NS)))
-                    log(f"    {c}: {_ns_c:,} still NS")
-
-                # Save checkpoint after P1c
-                try:
-                    with open(_p1_ckpt, "w") as _f:
-                        json.dump(phase1_extracted, _f)
-                except Exception:
-                    pass
-
             # ── Skip Phase 2 if requested ──
             if config.get("skip_phase2", False):
-                log(f"\n✅ Phase 1 + 1b + 1c complete — skipping Phase 2 (skip_phase2=True)")
+                log(f"\n✅ Phase 1 + 1b complete — skipping Phase 2 (skip_phase2=True)")
                 log(f"  Phase 1 checkpoint: {_p1_ckpt}")
                 _gsm2gse = dict(zip(target["gsm"], target["series_id"]))
                 import json as _json2
@@ -6092,17 +5998,11 @@ class App(tk.Tk):
                        activebackground=BG2
                        ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(0, 0))
 
-        self._var_phase1c = tk.BooleanVar(value=True)
-        tk.Checkbutton(g4, text="Phase 1c: Full re-extraction (no char limits)",
-                       variable=self._var_phase1c, bg=BG2, fg=FG, selectcolor=ACCENT,
-                       activebackground=BG2
-                       ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(0, 0))
-
         self._var_phase2 = tk.BooleanVar(value=True)
         tk.Checkbutton(g4, text="Phase 2: Collapse (retrieval + LLM normalization)",
                        variable=self._var_phase2, bg=BG2, fg=FG, selectcolor=ACCENT,
                        activebackground=BG2
-                       ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(0, 0))
+                       ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(0, 0))
 
         #  Model & Ollama card 
         c3 = card(left, "Model & Ollama")
@@ -7274,7 +7174,6 @@ class App(tk.Tk):
                 "skip_install":     self._var_skip.get(),
                 "skip_phase1":      not self._var_phase1.get(),
                 "skip_phase1b":     not self._var_phase1b.get(),
-                "skip_phase1c":     not self._var_phase1c.get(),
                 "skip_phase2":      not self._var_phase2.get(),
                 "gsm_list_file":    "",
             }
