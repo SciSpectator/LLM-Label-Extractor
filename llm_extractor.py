@@ -3126,6 +3126,29 @@ class CollapseWorker:
                 return cached, True, "episodic", {
                     "raw": raw_label, "final": cached, "rule": "episodic"}
 
+        # 2b. Composite passthrough — a semicolon-separated multi-label string
+        # is ONE cluster whose identity is ALL of its components together.
+        # Never route composites through retrieval+LLM pick against a
+        # single-label candidate list — that destroys them (e.g. "Liver; Breast"
+        # collapsed to "Liver"). Preserve the composite; only strip whitespace
+        # and dedupe case-insensitively while keeping first-seen casing/order.
+        if ";" in raw_label:
+            parts = [p.strip() for p in raw_label.split(";") if p.strip()]
+            seen = set()
+            unique_parts = []
+            for p in parts:
+                k_norm = p.lower()
+                if k_norm not in seen:
+                    seen.add(k_norm)
+                    unique_parts.append(p)
+            final = "; ".join(unique_parts)
+            with self._episodic_lock:
+                self._working_mem[key] = final
+                self._episodic[key] = final
+            return final, True, "composite_passthrough", {
+                "raw": raw_label, "final": final, "rule": "composite_passthrough",
+                "composite": True, "n_parts": len(unique_parts)}
+
         # 3. Retrieve top-20 candidates via BioLORD-2023 embedding similarity
         candidates = self._retrieve_candidates(col, raw_label, k=20)
 
