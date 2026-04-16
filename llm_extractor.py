@@ -5332,11 +5332,13 @@ def pipeline(config: dict, q: queue.Queue):
                          f"| episodic={ep_size:,} "
                          f"| {rate*1000:.0f}ms/sample "
                          f"| ETA {eta/60:.0f}min")
+                    _eta_h, _eta_m = int(eta // 3600), int((eta % 3600) // 60)
+                    _eta_str = f"{_eta_h}h {_eta_m}m" if _eta_h > 0 else f"{_eta_m}m"
                     log(f"  [{pct:.0f}%] {_samples_done[0]:,}/{_total_samples:,} samples "
                         f"| {_gse_done[0]}/{len(gse_list)} GSEs "
                         f"| episodic={ep_size:,} "
                         f"| {rate*1000:.0f}ms/sample "
-                        f"| ETA {_fmt_eta(eta)}")
+                        f"| ETA {_eta_str}")
 
                     with res_lock:
                         # Log progress every 100 samples
