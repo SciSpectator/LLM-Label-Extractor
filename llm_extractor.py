@@ -2822,7 +2822,7 @@ def _llm_call_think_off(model: str, prompt: str, ollama_url: str = DEFAULT_URL,
     }
     for attempt in range(1, 4):
         try:
-            resp = _get_session().post(url, json=payload, timeout=30)
+            resp = _get_session().post(url, json=payload, timeout=180)
             resp.raise_for_status()
             return resp.json().get("message", {}).get("content", "").strip()
         except Exception:
@@ -2915,18 +2915,15 @@ class GSEInferencer:
             return col_, _parse_single_label(text_)
 
         updated = current_labels.copy()
-        # Run per-label agents in parallel
-        from concurrent.futures import ThreadPoolExecutor as _TPE_inner
-        with _TPE_inner(max_workers=len(ns_fields),
-                        thread_name_prefix="P1bL") as _ex:
-            futs = {_ex.submit(_infer_one_label, c): c for c in ns_fields}
-            for f in futs:
-                try:
-                    col_r, val_r = f.result()
-                    if not is_ns(val_r):
-                        updated[col_r] = val_r
-                except Exception:
-                    pass
+        # Sequential per-sample label calls — outer pool handles cross-sample
+        # concurrency.  Avoids 9 in-flight calls vs 3 Ollama slots.
+        for c in ns_fields:
+            try:
+                col_r, val_r = _infer_one_label(c)
+                if not is_ns(val_r):
+                    updated[col_r] = val_r
+            except Exception:
+                pass
         return updated
 
 
@@ -4019,6 +4016,10 @@ def pipeline(config: dict, q: queue.Queue):
     def log(msg):           q.put({"type": "log",      "msg":  msg})
     def prog(pct, label=""): q.put({"type": "progress", "pct":  pct, "label": label})
 
+    # Stop event used by Phase 1c (and re-used by Phase 2) — must exist before
+    # Phase 1c references it; Phase 2 setup at line ~5098 re-assigns harmlessly.
+    stop_evt = threading.Event()
+
     server_proc = None
     try:
         db_path        = config["db_path"]
@@ -4674,17 +4675,17 @@ def pipeline(config: dict, q: queue.Queue):
                         time.sleep(3 * (_attempt + 1))
                     return col_, _parse_single_label(text_)
 
-                # Run 3 label agents in parallel (threads — Ollama handles concurrency)
-                from concurrent.futures import ThreadPoolExecutor as _TPE_inner
+                # Sequential per-sample label calls — outer pool handles cross-sample
+                # concurrency; this avoids 9 in-flight calls vs 3 Ollama slots (queue
+                # blowup → timeouts → NS).  3 outer × 1 inner = 3 in-flight, matches
+                # OLLAMA_NUM_PARALLEL.
                 result = {c: NS for c in _cols}
-                with _TPE_inner(max_workers=3, thread_name_prefix="P1L") as _ex:
-                    futs = {_ex.submit(_call_one_label, c): c for c in _cols}
-                    for f in futs:
-                        try:
-                            col_r, val_r = f.result()
-                            result[col_r] = val_r
-                        except Exception as _e:
-                            log(f"  [P1 WARN] {gsm_}/{futs[f]}: {_e}")
+                for c in _cols:
+                    try:
+                        col_r, val_r = _call_one_label(c)
+                        result[col_r] = val_r
+                    except Exception as _e:
+                        log(f"  [P1 WARN] {gsm_}/{c}: {_e}")
                 log(f"  [P1 RAW] {gsm_}: " +
                     " | ".join(f"{c}={result.get(c,NS)[:30]}" for c in _cols))
                 return gsm_, result
