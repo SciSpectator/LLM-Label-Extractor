@@ -2646,9 +2646,9 @@ def prompt_extract_with_gse(gsm: str, col: str, raw: dict,
     if ctx.title:
         gse_hint += f"Experiment title  : {ctx.title}\n"
     if getattr(ctx, "summary", ""):
-        gse_hint += f"Experiment summary: {ctx.summary[:400]}\n"
+        gse_hint += f"Experiment summary: {ctx.summary}\n"
     if getattr(ctx, "design", ""):
-        gse_hint += f"Overall design    : {ctx.design[:200]}\n"
+        gse_hint += f"Overall design    : {ctx.design}\n"
     if gse_hint:
         gse_hint += "\n"
 
@@ -2867,9 +2867,12 @@ class GSEInferencer:
         self.url      = ollama_url
         self.watchdog = watchdog
         self._log     = log_fn or (lambda m: None)
-        _title   = (gse_meta.get("gse_title") or gse_meta.get("title", ""))[:200]
-        _summary = (gse_meta.get("gse_summary") or gse_meta.get("summary", ""))[:400]
-        _design  = (gse_meta.get("gse_design") or gse_meta.get("design", ""))[:300]
+        # Full GSE context — no char limits (num_ctx handles truncation).
+        # The LLM must see the entire description to extract multi-label
+        # samples whose identity is buried later in the summary.
+        _title   = gse_meta.get("gse_title") or gse_meta.get("title", "")
+        _summary = gse_meta.get("gse_summary") or gse_meta.get("summary", "")
+        _design  = gse_meta.get("gse_design") or gse_meta.get("design", "")
         # Build per-label system prompts — each label gets its own GSE context
         self._systems = {}
         for col in LABEL_COLS_SCRATCH:
@@ -2980,8 +2983,8 @@ class CollapseWorker:
         self._gse_title = ""
         self._gse_summary = ""
         if gse_ctx:
-            self._gse_title = (gse_ctx.title or "")[:200]
-            self._gse_summary = (gse_ctx.summary or "")[:300]
+            self._gse_title = gse_ctx.title or ""
+            self._gse_summary = gse_ctx.summary or ""
 
     def end_gse(self):
         """Finalize GSE — promote working memory to global episodic."""
@@ -3268,9 +3271,9 @@ class GSEWorker:
         if ctx.title:
             _lines.append(f"Experiment title  : {ctx.title}")
         if getattr(ctx, "summary", ""):
-            _lines.append(f"Experiment summary: {ctx.summary[:500]}")
+            _lines.append(f"Experiment summary: {ctx.summary}")
         if getattr(ctx, "design", ""):
-            _lines.append(f"Overall design    : {ctx.design[:300]}")
+            _lines.append(f"Overall design    : {ctx.design}")
         self._gse_block: str = "\n".join(_lines) + "\n\n" if _lines else ""
 
     def _llm(self, prompt: str, max_tokens: int = 80, system: str = "") -> str:
