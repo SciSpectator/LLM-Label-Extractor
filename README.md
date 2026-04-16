@@ -440,26 +440,36 @@ The `gemma4:e2b` model (Google Gemma 4, 2B Edge) brings several improvements:
 
 #### Running on HPC / SLURM
 
-For HPC environments, make sure Ollama is running on the compute node (or accessible via a forwarded port), then submit as a standard job:
+A ready-to-submit SLURM script ships with the repo at [`run_cluster.sbatch`](run_cluster.sbatch). It creates a venv if missing, installs `requirements.txt`, starts Ollama with the same `OLLAMA_NUM_PARALLEL=3` cap the pipeline expects, pulls the model, validates `GEOmetadb.sqlite`, then launches `run_cluster.py`.
+
+```bash
+# Submit with default phases (1,1b,1c,2):
+sbatch run_cluster.sbatch
+
+# Override any environment variable at submit time:
+PHASES=2 PLATFORM_ONLY=GPL570 sbatch run_cluster.sbatch    # collapse-only on one GPL
+PHASES=1,1b,1c                 sbatch run_cluster.sbatch    # extract-only (no collapse)
+
+# Or run it interactively on an allocated node (bash ignores #SBATCH lines):
+bash run_cluster.sbatch
+```
+
+If you are not on SLURM, the same script runs under plain bash. Edit the top-of-file `#SBATCH` lines for your cluster's partition / QoS / account, and adjust `module load` calls for your site's software stack.
+
+Minimal manual equivalent:
 
 ```bash
 #!/bin/bash
 #SBATCH --job-name=llm-label
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
+#SBATCH --gres=gpu:1
 #SBATCH --time=48:00:00
 
-# Load modules (adjust for your cluster)
 module load python/3.10
-
-# Activate virtual environment
 source /path/to/LLM-Label-Extractor/venv/bin/activate
-
-# Start Ollama if not running as a service
 ollama serve &
 sleep 5
-
-# Run the pipeline
 python run_cluster.py
 ```
 
