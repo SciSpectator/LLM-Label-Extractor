@@ -898,13 +898,6 @@ class MemoryAgent:
             # True for raw labels like "CELECOXIB (.00001 M) FOR 6 H", letting
             # them pass the cluster gate as valid output labels.
 
-            # Update frequencies for existing labels too
-            with self._lock, self._conn() as c:
-                c.executemany(
-                    "UPDATE semantic_labels SET freq=? WHERE col=? AND label=?",
-                    [(freq[lbl], col, lbl) for lbl in existing if lbl in freq]
-                )
-
             # Tier 1: refresh core labels (top-N by frequency)
             top = freq.most_common()  # store all clusters, no cap
             with self._lock, self._conn() as c:
@@ -2967,6 +2960,7 @@ class CollapseWorker:
         self.watchdog  = watchdog
         self._log      = log_fn or (lambda m: None)
         self._episodic = {}  # {(col, raw_lower): canonical} — global across GSEs
+        self._episodic_lock = threading.Lock()  # guards _episodic / _working_mem
         self._cluster_vecs = {}  # {col: (labels, matrix)}
         self._st_model = None  # lazy-loaded sentence-transformers
         # Per-GSE working memory (set/cleared per GSE)
@@ -2978,9 +2972,10 @@ class CollapseWorker:
     def begin_gse(self, gse_id: str, gse_ctx: "GSEContext" = None):
         """Initialize working memory for a new GSE experiment."""
         # Promote working memory to global episodic before clearing
-        if self._working_mem:
-            self._episodic.update(self._working_mem)
-        self._working_mem = {}
+        with self._episodic_lock:
+            if self._working_mem:
+                self._episodic.update(self._working_mem)
+            self._working_mem = {}
         self._gse_id = gse_id
         self._gse_title = ""
         self._gse_summary = ""
@@ -2990,9 +2985,10 @@ class CollapseWorker:
 
     def end_gse(self):
         """Finalize GSE — promote working memory to global episodic."""
-        if self._working_mem:
-            self._episodic.update(self._working_mem)
-            self._working_mem = {}
+        with self._episodic_lock:
+            if self._working_mem:
+                self._episodic.update(self._working_mem)
+                self._working_mem = {}
         self._gse_id = None
         self._gse_title = ""
         self._gse_summary = ""
@@ -3116,18 +3112,19 @@ class CollapseWorker:
         key = (col, raw_label.lower().strip())
 
         # 1. Working memory — resolutions from THIS GSE (<1ms)
-        if key in self._working_mem:
-            cached = self._working_mem[key]
-            return cached, True, "working_mem", {
-                "raw": raw_label, "final": cached, "rule": "working_mem"}
+        with self._episodic_lock:
+            if key in self._working_mem:
+                cached = self._working_mem[key]
+                return cached, True, "working_mem", {
+                    "raw": raw_label, "final": cached, "rule": "working_mem"}
 
-        # 2. Global episodic cache — resolutions from ALL GSEs (<1ms)
-        if key in self._episodic:
-            cached = self._episodic[key]
-            # Also cache in working memory for this GSE
-            self._working_mem[key] = cached
-            return cached, True, "episodic", {
-                "raw": raw_label, "final": cached, "rule": "episodic"}
+            # 2. Global episodic cache — resolutions from ALL GSEs (<1ms)
+            if key in self._episodic:
+                cached = self._episodic[key]
+                # Also cache in working memory for this GSE
+                self._working_mem[key] = cached
+                return cached, True, "episodic", {
+                    "raw": raw_label, "final": cached, "rule": "episodic"}
 
         # 3. Retrieve top-20 candidates via BioLORD-2023 embedding similarity
         candidates = self._retrieve_candidates(col, raw_label, k=20)
@@ -3167,17 +3164,18 @@ class CollapseWorker:
             rule = "llm_fallback"
 
         # 5. Cache in BOTH working memory and global episodic
-        self._working_mem[key] = answer
-        self._episodic[key] = answer
-        # Also cache normalized variants
-        for variant in [raw_label.lower(), raw_label.title(),
-                        re.sub(r'[-_]', ' ', raw_label.lower()),
-                        re.sub(r'\s*\([^)]*\)\s*$', '', raw_label).lower().strip()]:
-            vkey = (col, variant.strip())
-            if vkey not in self._working_mem:
-                self._working_mem[vkey] = answer
-            if vkey not in self._episodic:
-                self._episodic[vkey] = answer
+        with self._episodic_lock:
+            self._working_mem[key] = answer
+            self._episodic[key] = answer
+            # Also cache normalized variants
+            for variant in [raw_label.lower(), raw_label.title(),
+                            re.sub(r'[-_]', ' ', raw_label.lower()),
+                            re.sub(r'\s*\([^)]*\)\s*$', '', raw_label).lower().strip()]:
+                vkey = (col, variant.strip())
+                if vkey not in self._working_mem:
+                    self._working_mem[vkey] = answer
+                if vkey not in self._episodic:
+                    self._episodic[vkey] = answer
 
         # 6. Log to MemoryAgent episodic store (persistent across runs)
         ma = self.mem_agent
@@ -3188,9 +3186,11 @@ class CollapseWorker:
                 ma.log_resolution(col, raw_label, answer, conf,
                                   platform=platform,
                                   gse=gse_ctx.gse_id if gse_ctx else "",
-                                  gsm=gsm, rule=rule)
-            except Exception:
-                pass
+                                  gsm=gsm, collapse_rule=rule)
+            except Exception as e:
+                # Surface the failure type so kwarg drift / DB errors don't
+                # silently empty Tier 3 episodic again
+                self._log(f"  [Phase2] log_resolution failed: {type(e).__name__}: {e}")
 
         audit = {"raw": raw_label, "final": answer,
                  "collapsed": True, "rule": rule,
@@ -3378,7 +3378,7 @@ class Watchdog:
     # ── Fluid scaling parameters ──
     SCALE_DOWN_FACTOR = 0.5   # multiply current workers by this when above threshold
     SCALE_UP_STEP     = 1     # add this many workers when below threshold
-    MIN_WORKERS       = 8     # minimum workers floor
+    MIN_WORKERS       = 1     # minimum workers floor (CLAUDE.md: cap at 3, floor at 1)
     SCALE_COOLDOWN_S  = 5     # seconds between scale adjustments
     _CONFIG_RELOAD_EVERY = 5  # reload config every N watchdog ticks
 
@@ -3390,7 +3390,7 @@ class Watchdog:
         self._lock = threading.Lock()
         self._calls: List[float] = []
         self._reason = None
-        self._max_workers = 20           # max concurrent GSE workers
+        self._max_workers = 3            # max concurrent GSE workers (CLAUDE.md hard cap)
         self._last_scale_time = 0.0      # cooldown tracker
         self._config_tick = 0            # reload counter
         self._reload_thresholds()        # apply any saved config on start
@@ -3698,7 +3698,7 @@ class Watchdog:
 
                     # 5) FLUID SCALING — scale up workers when resources are low
                     elif ram_pct < self.RAM_LOW_PCT and cpu_pct < self.CPU_LOW_PCT:
-                        max_w = getattr(self, "_max_workers", 210)
+                        max_w = getattr(self, "_max_workers", 3)
                         if current_workers < max_w:
                             new_n = min(max_w,
                                         current_workers + self.SCALE_UP_STEP)
@@ -3938,9 +3938,18 @@ def pipeline_multi(config: dict, q: queue.Queue):
     log(f"{'='*60}")
 
     # ETA estimate — Phase 1 (extraction) + Phase 2 (collapse)
-    workers = config.get("num_workers") or 8
-    p1_s    = total_samples * 0.15 / workers   # ~150ms/sample extraction
-    p2_s    = total_samples * 0.20 / workers   # ~200ms/sample collapse
+    # Per-sample latencies depend on the active model:
+    #   gemma2:2b  ~150ms extract, ~200ms collapse
+    #   gemma4:e2b ~880ms extract, ~700ms collapse
+    workers = config.get("num_workers") or 3
+    _model  = (config.get("extraction_model") or
+               config.get("model") or DEFAULT_MODEL).lower()
+    if "gemma4" in _model or "e2b" in _model:
+        p1_lat, p2_lat = 0.88, 0.70
+    else:
+        p1_lat, p2_lat = 0.15, 0.20
+    p1_s    = total_samples * p1_lat / workers
+    p2_s    = total_samples * p2_lat / workers
     overhead_s = total_platforms * 120          # DB load + NCBI per platform
     total_s = p1_s + p2_s + overhead_s
     def _fmt_eta(s):
@@ -4628,9 +4637,6 @@ def pipeline(config: dict, q: queue.Queue):
                 worker_ = _p1_workers.get(gse_) or GSEWorker(
                     gse_, GSEContext(gse_), model, ollama_url,
                     watchdog, mem_agent=mem_agent, platform=platform_id)
-                # raw_block removed (dead code)
-                if raw_block == "(no metadata)":
-                    log(f"  [P1 WARN] {gsm_}: no metadata")
                 # Common metadata fields — no char limits (num_ctx handles truncation)
                 _title = str(raw_.get("gsm_title","")).strip()
                 _source = str(raw_.get("source_name","")).strip()
@@ -5248,10 +5254,10 @@ def pipeline(config: dict, q: queue.Queue):
                 if stop_evt.is_set():
                     return 0
 
-                # Each thread gets its own worker with shared episodic but
-                # independent working memory
-                # Use the shared _cw (episodic is thread-safe dict reads;
-                # working memory is per-GSE and cleared between GSEs)
+                # Phase 2 is currently sequential per GSE; the shared _cw is
+                # protected by self._episodic_lock so begin/end_gse promotion
+                # and per-sample writes are safe even if this loop is later
+                # parallelized.
                 gse_ctx = gse_contexts.get(gse_id, GSEContext(gse_id))
 
                 # Begin GSE — initialize working memory with experiment context
@@ -7336,11 +7342,6 @@ class App(tk.Tk):
                 log(f"Pulling extraction model {EXTRACTION_MODEL} ...")
                 pull_model_blocking(EXTRACTION_MODEL, log)
                 log(f"{EXTRACTION_MODEL} ready.")
-            # Auto-pull model before pipeline starts
-            if not model_available(EXTRACTION_MODEL, config["ollama_url"]):
-                log(f"Pulling {EXTRACTION_MODEL} ...")
-                pull_model_blocking(EXTRACTION_MODEL, log)
-                log(f"{EXTRACTION_MODEL} ready.")
             else:
                 log(f"{EXTRACTION_MODEL} ready (already pulled).")
             config["server_proc"] = server_proc
@@ -7351,7 +7352,10 @@ class App(tk.Tk):
             log(f"[ERROR] {exc}\n{traceback.format_exc()}")
             q.put({"type": "done", "success": False})
         finally:
-            _kill_ollama()
+            # Only kill the server if WE started it; respect user-managed
+            # processes (skip_install=True or pre-existing server)
+            if server_proc is not None:
+                _kill_ollama()
 
     def _run_with_setup_multi(self, config):
         """Same as _run_with_setup but calls pipeline_multi instead of pipeline."""
@@ -7412,7 +7416,10 @@ class App(tk.Tk):
             log(f"[ERROR] {exc}\n{traceback.format_exc()}")
             q.put({"type": "done", "success": False})
         finally:
-            _kill_ollama()
+            # Only kill the server if WE started it; respect user-managed
+            # processes (skip_install=True or pre-existing server)
+            if server_proc is not None:
+                _kill_ollama()
 
     def _stop(self):
         self._running = False
@@ -7477,7 +7484,8 @@ class App(tk.Tk):
                             continue
                         lbl.grid()
                         pct = 100 * f_ / tot if tot else 0
-                        bar = "" * int(pct / 10) + "" * (10 - int(pct / 10))
+                        filled = int(pct / 10)
+                        bar = "#" * filled + "-" * (10 - filled)
                         lbl.config(
                             text=f"{col:<10} [{bar}] {pct:5.1f}%  "
                                  f"resolved: {f_:,}  still NS: {s_:,}",
