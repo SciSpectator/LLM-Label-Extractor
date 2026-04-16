@@ -3147,8 +3147,12 @@ class CollapseWorker:
             answer = answer[4:].strip().strip('"').strip("'").rstrip(".")
             rule = "llm_new"
 
-        # Garbage filter
-        if any(g in answer.lower() for g in self._GARBAGE) or len(answer) > 60:
+        # Garbage filter — only fires when the LLM returns hallucinated prose
+        # (keywords from self._GARBAGE). Length alone is NOT a trigger: long
+        # answers are legitimate for composite multi-label samples (e.g. a
+        # pooled treatment like "Drug A; Drug B; Drug C; Drug D") and must be
+        # preserved as their own composite cluster identity.
+        if any(g in answer.lower() for g in self._GARBAGE):
             parts = re.split(r'[,\n;()]', answer)
             cleaned = parts[0].strip().strip('"').rstrip(".")
             if len(cleaned) > 60 or any(g in cleaned.lower() for g in self._GARBAGE):
