@@ -49,6 +49,88 @@
   <img src="docs/architecture.svg" alt="LLM-Label-Extractor Pipeline Architecture" width="100%">
 </p>
 
+<details>
+<summary><b>📊 Interactive workflow diagram (click to expand) — renders natively on GitHub</b></summary>
+
+```mermaid
+flowchart LR
+    %% ── Styling ──
+    classDef input    fill:#ECEFF1,stroke:#546E7A,stroke-width:2px,color:#263238
+    classDef phase1   fill:#E3F2FD,stroke:#1976D2,stroke-width:2px,color:#0D47A1
+    classDef phase1b  fill:#FFF3E0,stroke:#F57C00,stroke-width:2px,color:#E65100
+    classDef phase1c  fill:#FFF8E1,stroke:#F9A825,stroke-width:2px,color:#F57F17
+    classDef phase2   fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20
+    classDef memory   fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#4A148C
+    classDef watchdog fill:#FCE4EC,stroke:#C2185B,stroke-width:2px,color:#880E4F
+    classDef output   fill:#ECEFF1,stroke:#546E7A,stroke-width:2px,color:#263238
+    classDef llm      fill:#FFFFFF,stroke:#455A64,stroke-width:1.5px,color:#263238
+
+    IN["📥 INPUT<br/>GEOmetadb.sqlite<br/>GSM + GSE metadata"]:::input
+
+    subgraph P1 ["🔬 Phase 1 — Raw Extraction · ~0.88 s/sample"]
+        direction TB
+        P1_T["🧫 Tissue agent"]:::llm
+        P1_C["🦠 Condition agent"]:::llm
+        P1_R["💊 Treatment agent"]:::llm
+        P1_NOTE["Verbatim · multi-value semicolons · no normalization"]
+    end
+    class P1 phase1
+
+    CP1["💾 phase1_extracted.json · checkpoint every 5,000"]:::input
+
+    subgraph P1b ["🔍 Phase 1b — NS Inference · KV-cached system prompt (~40% faster)"]
+        direction TB
+        P1b_GSE["GSE title · summary · design injected"]
+        P1b_RULES["Disease study → sample has it · Control → Condition = Control"]
+    end
+    class P1b phase1b
+
+    subgraph P1c ["🧬 Phase 1c — Full Re-extraction · ZERO truncation · num_ctx=4096"]
+        direction TB
+        P1c_FULL["Full metadata + GSE context · no [:N] slicing"]
+        P1c_NOTE["Fires only for residual NS samples"]
+    end
+    class P1c phase1c
+
+    subgraph P2 ["⚡ Phase 2 — Retrieval-augmented LLM Collapse (CollapseWorker)"]
+        direction LR
+        P2_CACHE["1️⃣ Episodic cache<br/>&lt;1 ms · ~55% hit<br/>working_mem + global"]:::llm
+        P2_BIO["2️⃣ BioLORD-2023-C<br/>top-20 candidates<br/>~17 ms · CPU"]:::llm
+        P2_LLM["3️⃣ LLM pick<br/>gemma4:e2b think=False<br/>~700 ms · temp=0"]:::llm
+        P2_CACHE -->|"miss"| P2_BIO
+        P2_BIO --> P2_LLM
+    end
+    class P2 phase2
+
+    OUT["📤 OUTPUT<br/>labels_final.csv<br/>collapse_report.csv"]:::output
+
+    MEM[("🧠 MemoryAgent<br/>biomedical_memory.db<br/>4-tier · ~6,920 embeddings")]:::memory
+    WD(("🐕 Watchdog<br/>fluid scaling<br/>CPU/RAM/GPU/temp"))
+    class WD watchdog
+
+    %% Flow
+    IN --> P1 --> CP1 --> P1b --> P1c --> P2 --> OUT
+
+    %% Memory connects to extraction, inference, collapse
+    MEM -.memory lookup.-> P1
+    MEM -.memory lookup.-> P1b
+    MEM -.memory lookup.-> P2
+    P2 -.persist episodic.-> MEM
+
+    %% Watchdog throttles agents
+    WD -.scale gate.-> P1
+    WD -.scale gate.-> P1b
+    WD -.scale gate.-> P2
+```
+
+**Legend:**
+- **Solid arrows** = data flow through the pipeline
+- **Dashed arrows** = cross-cutting concerns (memory lookups, watchdog throttling)
+- **Rounded boxes** = LLM-backed agents
+- **Database icon** = persistent 4-tier memory (shared across all runs)
+
+</details>
+
 ---
 
 ## Agent Workflow
